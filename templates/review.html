@@ -1,0 +1,167 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review mappings</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container wide">
+    <h1>Review mappings</h1>
+    <section id="progressPanel" class="panel">
+      <div class="progress-header">
+        <div>
+          <div id="stageText" class="stage">Preparing…</div>
+          <div id="detailText" class="detail">Waiting for status.</div>
+        </div>
+        <div id="percentText" class="percent">0%</div>
+      </div>
+      <div class="progress-bar-wrap"><div id="progressBar" class="progress-bar"></div></div>
+    </section>
+
+    <form id="applyForm" method="post" action="{{ url_for('prepare_apply', job_id=job_id) }}" enctype="multipart/form-data" style="display:none;">
+      <div class="panel toolbar">
+        <div>Choose one match for each PPT image. “Other” lets you upload a replacement file for that row.</div>
+        <button type="submit">Next</button>
+      </div>
+      <table class="mapping-table">
+        <thead>
+          <tr>
+            <th>PPTX image</th>
+            <th>Best 3 matches / Other</th>
+          </tr>
+        </thead>
+        <tbody id="mappingBody"></tbody>
+      </table>
+      <div class="footer-actions">
+        <button type="submit">Next</button>
+      </div>
+    </form>
+  </main>
+
+<script>
+const jobId = {{ job_id|tojson }};
+let loaded = false;
+
+function pct(v) {
+  return `${Math.round(v)}%`;
+}
+
+function niceSlides(slides) {
+  if (!slides || !slides.length) return 'No slide reference found';
+  return 'Slides: ' + slides.join(', ');
+}
+
+function createChoice(row, match, checked) {
+  const wrap = document.createElement('label');
+  wrap.className = 'choice-card';
+  const radio = document.createElement('input');
+  radio.type = 'radio';
+  radio.name = `choice__${row.ppt_name}`;
+  radio.value = match.key_name;
+  if (checked) radio.checked = true;
+  wrap.appendChild(radio);
+
+  const inner = document.createElement('div');
+  inner.className = 'choice-inner';
+  inner.innerHTML = `
+    <img src="/job/${jobId}/preview/${encodeURIComponent(match.preview)}" alt="${match.key_name}">
+    <div class="choice-meta">
+      <div class="choice-title">${match.display_name || match.key_name}</div>
+      <div class="choice-sub">${match.replacement_kind} · ${match.key_ext} · distance ${match.distance}</div>
+    </div>`;
+  wrap.appendChild(inner);
+  return wrap;
+}
+
+function createOtherChoice(row) {
+  const wrap = document.createElement('div');
+  wrap.className = 'choice-card other-card';
+  wrap.innerHTML = `
+    <label class="other-option">
+      <input type="radio" name="choice__${row.ppt_name}" value="__other__">
+      <span>Other</span>
+    </label>
+    <input type="file" name="custom__${row.ppt_name}" accept=".svg,.pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp,.gif">
+    <div class="small-note">Upload a replacement just for this row.</div>
+  `;
+  return wrap;
+}
+
+function createSkipChoice(row, checked) {
+  const wrap = document.createElement('label');
+  wrap.className = 'choice-card skip-card';
+  wrap.innerHTML = `
+    <input type="radio" name="choice__${row.ppt_name}" value="__skip__" ${checked ? 'checked' : ''}>
+    <div class="choice-inner"><div class="choice-meta"><div class="choice-title">Skip replacement</div></div></div>`;
+  return wrap;
+}
+
+function renderRows(rows) {
+  const body = document.getElementById('mappingBody');
+  body.innerHTML = '';
+  rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    const tdLeft = document.createElement('td');
+    const tdRight = document.createElement('td');
+
+    tdLeft.innerHTML = `
+      <div class="ppt-cell">
+        <img class="ppt-preview" src="/job/${jobId}/preview/${encodeURIComponent(row.ppt_preview)}" alt="${row.ppt_name}">
+        <div class="ppt-meta">
+          <div class="ppt-title">${row.ppt_name}</div>
+          <div>${row.ppt_width} × ${row.ppt_height}</div>
+          <div>${niceSlides(row.slides)}</div>
+          <div>Quality: ${row.quality}</div>
+        </div>
+      </div>`;
+
+    const choices = document.createElement('div');
+    choices.className = 'choices-grid';
+    if (row.top_matches && row.top_matches.length) {
+      row.top_matches.forEach((match, i) => choices.appendChild(createChoice(row, match, row.default_choice === match.key_name || (!row.default_choice && i === 0))));
+    } else {
+      choices.appendChild(createSkipChoice(row, true));
+    }
+    choices.appendChild(createOtherChoice(row));
+    choices.appendChild(createSkipChoice(row, row.default_choice === '__skip__' || (!row.top_matches || !row.top_matches.length)));
+    tdRight.appendChild(choices);
+
+    tr.appendChild(tdLeft);
+    tr.appendChild(tdRight);
+    body.appendChild(tr);
+  });
+}
+
+async function poll() {
+  const res = await fetch(`/job/${jobId}/status`);
+  const status = await res.json();
+  document.getElementById('stageText').textContent = status.stage;
+  document.getElementById('detailText').textContent = status.detail;
+  document.getElementById('percentText').textContent = pct(status.progress || 0);
+  document.getElementById('progressBar').style.width = pct(status.progress || 0);
+
+  if (status.status === 'ready' && !loaded) {
+    loaded = true;
+    const rowsRes = await fetch(`/job/${jobId}/results`);
+    const rowsJson = await rowsRes.json();
+    renderRows(rowsJson.rows);
+    document.getElementById('applyForm').style.display = 'block';
+    document.getElementById('progressPanel').classList.add('done');
+    return;
+  }
+
+  if (status.status === 'error') {
+    document.getElementById('progressPanel').classList.add('error');
+    return;
+  }
+
+  setTimeout(poll, 1200);
+}
+
+poll();
+</script>
+</body>
+</html>

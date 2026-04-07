@@ -1,0 +1,54 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PPTX ↔ Keynote Image Mapper</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="container narrow">
+    <h1>PPTX ↔ Keynote Image Mapper</h1>
+    <p class="lede">Start with a PowerPoint export and the original Keynote package. The app fingerprints images, proposes the best 3 replacements for each PPTX image, then patches the PPTX with your confirmed selections.</p>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="flash">{{ messages[0] }}</div>
+      {% endif %}
+    {% endwith %}
+
+    <section class="panel">
+      <h2>Use local file paths</h2>
+      <form method="post" action="{{ url_for('start') }}" class="stacked-form">
+        <label>PPTX path
+          <input type="text" name="pptx_path" placeholder="/path/to/PhD_Seminar.pptx">
+        </label>
+        <label>Keynote path
+          <input type="text" name="keynote_path" placeholder="/path/to/Presentation.key">
+        </label>
+        <label>Existing confirmed_mapping.csv (optional)
+          <input type="text" name="mapping_path" placeholder="/path/to/confirmed_mapping.csv">
+        </label>
+        <button type="submit">Start mapping</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Or upload both files</h2>
+      <form method="post" action="{{ url_for('start') }}" enctype="multipart/form-data" class="stacked-form">
+        <label>PPTX file
+          <input type="file" name="pptx_file" accept=".pptx">
+        </label>
+        <label>Keynote package
+          <input type="file" name="keynote_file" accept=".key,.zip,application/zip">
+        </label>
+        <label>Existing confirmed_mapping.csv (optional)
+          <input type="file" name="mapping_file" accept=".csv,text/csv">
+        </label>
+        <button type="submit">Upload and map</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>
