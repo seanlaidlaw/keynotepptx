@@ -21,6 +21,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 import cairosvg
+import cv2
 import fitz
 import numpy as np
 from flask import Flask, flash, jsonify, redirect, render_template, request, send_file, send_from_directory, url_for
@@ -97,7 +98,36 @@ def is_keynote_ignored_preview(name: str) -> bool:
     return bool(re.match(r'^st-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-\d+\.(png|jpe?g|tiff?|gif|bmp|webp)$', name_l))
 
 
+def prepare_image_for_hashing(img: Image.Image) -> Image.Image:
+    """Convert image to RGB, handling transparency and color mode."""
+    # Handle transparency by compositing onto white background
+    if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+        bg = Image.new('RGB', img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    # Convert other modes to RGB (e.g., CMYK, L, P, etc.)
+    elif img.mode not in ('RGB', 'L'):
+        img = img.convert('RGB')
+    return img
+
+def ahash_from_image(img: Image.Image, hash_size: int = 8) -> str:
+    """Average hash: resize, grayscale, compare to mean."""
+    img = prepare_image_for_hashing(img)
+    img = ImageOps.exif_transpose(img).convert('L').resize(
+        (hash_size, hash_size), Image.Resampling.LANCZOS
+    )
+    pixels = np.asarray(img, dtype=np.float32)
+    mean = np.mean(pixels)
+    diff = pixels > mean
+    bits = ''.join('1' if v else '0' for v in diff.flatten())
+    return f'{int(bits, 2):016x}'
+
+
 def phash_from_image(img: Image.Image, hash_size: int = 8, highfreq_factor: int = 4) -> str:
+    """Perceptual hash using DCT."""
+    img = prepare_image_for_hashing(img)
     img = ImageOps.exif_transpose(img).convert('L').resize(
         (hash_size * highfreq_factor, hash_size * highfreq_factor), Image.Resampling.LANCZOS
     )
@@ -111,8 +141,35 @@ def phash_from_image(img: Image.Image, hash_size: int = 8, highfreq_factor: int 
     return f'{int(bits, 2):016x}'
 
 
+def colormomenthash_from_image(img: Image.Image) -> list[float] | None:
+    """Color moment hash using OpenCV's img_hash.ColorMomentHash."""
+    try:
+        # Prepare image for hashing (handles transparency, converts to RGB/L)
+        img = prepare_image_for_hashing(img)
+        # ColorMomentHash needs RGB, convert L to RGB
+        if img.mode == 'L':
+            img = img.convert('RGB')
+        # PIL to numpy array (RGB)
+        rgb_array = np.array(img)
+        # Convert RGB to BGR for OpenCV
+        bgr_array = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR)
+
+        # Compute color moment hash
+        hash_obj = cv2.img_hash.ColorMomentHash_create()
+        hash_array = hash_obj.compute(bgr_array)
+        return hash_array.flatten().tolist()
+    except Exception:
+        # OpenCV or img_hash not available
+        return None
+
+
 def hamming_hex(h1: str, h2: str) -> int:
     return (int(h1, 16) ^ int(h2, 16)).bit_count()
+
+
+def colormoment_distance(h1: list[float], h2: list[float]) -> float:
+    """Euclidean distance between two color moment hash arrays."""
+    return float(np.linalg.norm(np.array(h1) - np.array(h2)))
 
 
 def render_to_image(path: Path, max_size: int = 768) -> Image.Image:
@@ -120,14 +177,27 @@ def render_to_image(path: Path, max_size: int = 768) -> Image.Image:
     if ext in RASTER_EXTS:
         img = Image.open(path)
         img.load()
+        # Resize if larger than max_size (preserving aspect ratio)
+        if max(img.size) > max_size:
+            img = ImageOps.contain(img, (max_size, max_size), Image.Resampling.LANCZOS)
         return img
     if ext == '.svg':
-        png_bytes = cairosvg.svg2png(url=str(path), output_width=max_size, output_height=max_size)
+        png_bytes = cairosvg.svg2png(url=str(path), output_width=max_size, background_color='white')
         return Image.open(io.BytesIO(png_bytes))
     if ext == '.pdf':
         doc = fitz.open(str(path))
         page = doc.load_page(0)
-        pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5), alpha=False)
+        # Calculate matrix to render at approximately max_size pixels
+        rect = page.rect
+        width_pt = rect.width
+        height_pt = rect.height
+        max_dim_pt = max(width_pt, height_pt)
+        if max_dim_pt == 0:
+            matrix = fitz.Matrix(2.5, 2.5)  # fallback
+        else:
+            scale = max_size / max_dim_pt
+            matrix = fitz.Matrix(scale, scale)
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
         return Image.open(io.BytesIO(pix.tobytes('png')))
     raise ValueError(f'Unsupported file type: {path}')
 
@@ -135,7 +205,16 @@ def render_to_image(path: Path, max_size: int = 768) -> Image.Image:
 def save_preview(src: Path, dst: Path, max_size: tuple[int, int] = (260, 180)) -> tuple[int, int]:
     img = render_to_image(src)
     w, h = img.size
-    preview = ImageOps.contain(img.convert('RGB'), max_size, Image.Resampling.LANCZOS)
+    # Handle transparency by compositing onto white background
+    if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+        bg = Image.new('RGB', img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    else:
+        img = img.convert('RGB')
+    preview = ImageOps.contain(img, max_size, Image.Resampling.LANCZOS)
     dst.parent.mkdir(parents=True, exist_ok=True)
     preview.save(dst, format='PNG')
     return w, h
@@ -217,7 +296,7 @@ def convert_svg_to_png_600(svg_path: Path, png_path: Path) -> None:
     png_path.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.run([
         'inkscape', str(svg_path), '--export-type=png', '--export-area-drawing', '--export-area-snap',
-        '--export-width=6144', '--export-dpi=600', f'--export-filename={png_path}'
+        '--export-width=6144', '--export-dpi=600', '--export-background=#ffffff', f'--export-filename={png_path}'
     ], capture_output=True, text=True)
     if proc.returncode != 0 or "cannot be opened" in proc.stderr or "failed to create document" in proc.stderr:
         raise RuntimeError(proc.stderr.strip() or 'inkscape failed')
@@ -323,13 +402,15 @@ def fingerprint_paths(paths: list[Path], preview_dir: Path, kind: str, progress_
         row = {'path': str(p), 'name': p.name, 'ext': p.suffix.lower(), 'bytes': p.stat().st_size, 'error': None}
         try:
             img = render_to_image(p)
+            row['ahash'] = ahash_from_image(img)
             row['phash'] = phash_from_image(img)
+            row['cmhash'] = colormomenthash_from_image(img)
             row['width'], row['height'] = img.size
             preview_name = f'{kind}_{idx:04d}_{secure_filename(p.name)}.png'
             save_preview(p, preview_dir / preview_name)
             row['preview_name'] = preview_name
         except Exception as e:
-            row.update({'phash': None, 'width': None, 'height': None, 'preview_name': None, 'error': str(e)})
+            row.update({'ahash': None, 'phash': None, 'cmhash': None, 'width': None, 'height': None, 'preview_name': None, 'error': str(e)})
         rows.append(row)
         if progress_cb:
             progress_cb(idx / total)
@@ -428,29 +509,91 @@ def build_mapping(job_id: str) -> None:
     key_imgs = sorted([p for p in key_data_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS and not is_keynote_ignored_preview(p.name)])
     ppt_imgs = sorted([p for p in ppt_media_dir.iterdir() if p.is_file() and p.suffix.lower() in PPT_RASTER_EXTS])
 
-    set_progress(job_id, 'phashing_keynote', f'Fingerprinting {len(key_imgs)} Keynote images', 8)
-    key_rows = fingerprint_paths(key_imgs, previews, 'key', progress_cb=lambda x: set_progress(job_id, 'phashing_keynote', f'Fingerprinting {len(key_imgs)} Keynote images', 8 + 26 * x))
+    set_progress(job_id, 'fingerprinting_keynote', f'Fingerprinting {len(key_imgs)} Keynote images', 8)
+    key_rows = fingerprint_paths(key_imgs, previews, 'key', progress_cb=lambda x: set_progress(job_id, 'fingerprinting_keynote', f'Fingerprinting {len(key_imgs)} Keynote images', 8 + 26 * x))
     key_valid = [r for r in key_rows if r['phash']]
 
-    set_progress(job_id, 'phashing_pptx', f'Fingerprinting {len(ppt_imgs)} PPTX images', 35)
-    ppt_rows = fingerprint_paths(ppt_imgs, previews, 'ppt', progress_cb=lambda x: set_progress(job_id, 'phashing_pptx', f'Fingerprinting {len(ppt_imgs)} PPTX images', 35 + 20 * x))
+    set_progress(job_id, 'fingerprinting_pptx', f'Fingerprinting {len(ppt_imgs)} PPTX images', 35)
+    ppt_rows = fingerprint_paths(ppt_imgs, previews, 'ppt', progress_cb=lambda x: set_progress(job_id, 'fingerprinting_pptx', f'Fingerprinting {len(ppt_imgs)} PPTX images', 35 + 20 * x))
     ppt_valid = [r for r in ppt_rows if r['phash']]
 
     slide_media = parse_ppt_slide_media(ppt_dir)
-    set_progress(job_id, 'comparing', 'Comparing perceptual hashes', 58)
+    set_progress(job_id, 'comparing', 'Comparing images with multi-stage hashing', 58)
 
     rows_for_ui: list[dict[str, Any]] = []
     keynote_match_counts: dict[str, int] = defaultdict(int)
     total = max(len(ppt_valid), 1)
+
+    # Thresholds for multi-stage filtering
+    AHASH_THRESHOLD = 25  # out of 64 bits (increased for format tolerance)
+    PHASH_THRESHOLD = 7   # as requested by user
+
     for idx, prow in enumerate(ppt_valid, start=1):
-        scored = []
+        candidates = []
+
+        # Stage 1: Filter by average hash (very fast)
         for krow in key_valid:
-            dist = hamming_hex(prow['phash'], krow['phash'])
-            scored.append({**krow, 'distance': dist, 'priority': ext_priority(krow['ext']), 'replacement_kind': choose_replacement_kind(krow['ext'])})
+            if prow['ahash'] is None or krow['ahash'] is None:
+                # Fallback: include all if ahash missing
+                candidates.append(krow)
+            else:
+                a_dist = hamming_hex(prow['ahash'], krow['ahash'])
+                if a_dist <= AHASH_THRESHOLD:
+                    candidates.append(krow)
+
+        # If no candidates after ahash filter, fallback to all key images
+        if not candidates:
+            candidates = key_valid
+
+        # Stage 2: Filter by perceptual hash with threshold 7
+        filtered = []
+        for krow in candidates:
+            if prow['phash'] is None or krow['phash'] is None:
+                # Fallback: include with high distance
+                filtered.append((krow, 999))
+            else:
+                p_dist = hamming_hex(prow['phash'], krow['phash'])
+                if p_dist <= PHASH_THRESHOLD:
+                    # Store phash distance for sorting later
+                    filtered.append((krow, p_dist))
+
+        # Stage 3: Compute color moment distance for remaining candidates
+        scored = []
+        for krow, p_dist in filtered:
+            if prow['cmhash'] is None or krow['cmhash'] is None:
+                # Fallback: use phash distance
+                cm_dist = float(p_dist)
+            else:
+                cm_dist = colormoment_distance(prow['cmhash'], krow['cmhash'])
+            scored.append({
+                **krow,
+                'distance': cm_dist,
+                'phash_distance': p_dist,
+                'priority': ext_priority(krow['ext']),
+                'replacement_kind': choose_replacement_kind(krow['ext'])
+            })
+
+        # If no candidates after phash filtering, fallback to original phash-based ranking
+        if not scored:
+            for krow in key_valid:
+                if prow['phash'] is None or krow['phash'] is None:
+                    p_dist = 999
+                else:
+                    p_dist = hamming_hex(prow['phash'], krow['phash'])
+                scored.append({
+                    **krow,
+                    'distance': float(p_dist),
+                    'phash_distance': p_dist,
+                    'priority': ext_priority(krow['ext']),
+                    'replacement_kind': choose_replacement_kind(krow['ext'])
+                })
+
+        # Sort by color moment distance (or fallback distance), then priority, then name
         scored.sort(key=lambda r: (r['distance'], r['priority'], r['name']))
         top3 = scored[:3]
         if top3:
             keynote_match_counts[top3[0]['name']] += 1
+
         row = {
             'ppt_name': prow['name'],
             'ppt_path': prow['path'],
@@ -462,7 +605,8 @@ def build_mapping(job_id: str) -> None:
                 'key_name': m['name'],
                 'display_name': m['name'],
                 'key_ext': m['ext'],
-                'distance': int(m['distance']),
+                'distance': float(m['distance']),  # color moment distance (or fallback)
+                'phash_distance': int(m['phash_distance']),
                 'bytes': int(m['bytes']),
                 'preview': m['preview_name'],
                 'replacement_kind': m['replacement_kind'],
@@ -470,14 +614,15 @@ def build_mapping(job_id: str) -> None:
             'default_choice': top3[0]['name'] if top3 else '__skip__',
         }
         rows_for_ui.append(row)
-        set_progress(job_id, 'comparing', f'Comparing perceptual hashes ({idx}/{len(ppt_valid)})', 58 + 35 * (idx / total))
+        set_progress(job_id, 'comparing', f'Comparing images ({idx}/{len(ppt_valid)})', 58 + 35 * (idx / total))
 
     for row in rows_for_ui:
         if not row['top_matches']:
             row['quality'] = 'no_match'
             continue
         best = row['top_matches'][0]
-        d = best['distance'] if isinstance(best['distance'], int) else 999
+        # Use phash_distance for quality classification (0-64 range)
+        d = best.get('phash_distance', 999)
         flags = []
         if keynote_match_counts[best['key_name']] > 1:
             flags.append('multi_map')
@@ -502,9 +647,11 @@ def build_mapping(job_id: str) -> None:
         writer.writerow(['ppt_name', 'slides', 'quality', 'suggested_key_name', 'suggested_kind', 'suggested_distance', 'default_choice'])
         for row in rows_for_ui:
             top = row['top_matches'][0] if row['top_matches'] else None
+            # Use phash_distance for compatibility with existing mapping files
+            dist = top.get('phash_distance', top['distance'] if top else '') if top else ''
             writer.writerow([
                 row['ppt_name'], ';'.join(map(str, row['slides'])), row['quality'],
-                top['key_name'] if top else '', top['replacement_kind'] if top else '', top['distance'] if top else '', row['default_choice']
+                top['key_name'] if top else '', top['replacement_kind'] if top else '', dist, row['default_choice']
             ])
 
     update_job(job_id, status='ready', stage='ready', detail='Review mappings and confirm replacements.', progress=100.0,
@@ -522,9 +669,12 @@ def start_background_build(job_id: str) -> None:
     threading.Thread(target=runner, daemon=True).start()
 
 
-def create_job_from_files(pptx_file: Path, keynote_file: Path, existing_mapping_file: Path | None = None) -> str:
-    job_id = uuid.uuid4().hex[:12]
-    root = DATA_ROOT / job_id
+def create_job_from_files(pptx_file: Path, keynote_file: Path, existing_mapping_file: Path | None = None, root: Path | None = None) -> str:
+    if root is None:
+        job_id = uuid.uuid4().hex[:12]
+        root = DATA_ROOT / job_id
+    else:
+        job_id = root.name
     root.mkdir(parents=True, exist_ok=True)
     with JOBS_LOCK:
         JOBS[job_id] = {
@@ -553,8 +703,9 @@ def start():
     mapping_path_text = (request.form.get('mapping_path') or '').strip()
 
     if pptx_upload and keynote_upload and pptx_upload.filename and keynote_upload.filename:
-        job_root = DATA_ROOT / uuid.uuid4().hex[:12]
-        inp = job_root / 'inputs'
+        job_hex = uuid.uuid4().hex[:12]
+        root = DATA_ROOT / job_hex
+        inp = root / 'inputs'
         inp.mkdir(parents=True, exist_ok=True)
         pptx_path = inp / secure_filename(pptx_upload.filename)
         key_path = inp / secure_filename(keynote_upload.filename)
@@ -564,7 +715,7 @@ def start():
         if mapping_upload and mapping_upload.filename:
             mapping_path = inp / secure_filename(mapping_upload.filename)
             mapping_upload.save(mapping_path)
-        job_id = create_job_from_files(pptx_path, key_path, mapping_path)
+        job_id = create_job_from_files(pptx_path, key_path, mapping_path, root=root)
         return redirect(url_for('review_job', job_id=job_id))
 
     if pptx_path_text and keynote_path_text:
