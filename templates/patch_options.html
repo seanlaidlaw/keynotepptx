@@ -29,14 +29,14 @@
 
       <form method="post" action="{{ url_for('apply_mapping', job_id=job_id) }}">
         <input type="hidden" name="patch_mode" value="embed_png_600">
-        <button type="submit" class="big-button">Embed as 600 DPI PNG</button>
-        <p class="small-note">Convert selected SVG/PDF replacements to high-quality PNG using the fixed 6144 width and 600 DPI settings.</p>
+        <button type="submit" class="big-button">Embed as high quality PNG</button>
+        <p class="small-note">Convert selected SVG/PDF replacements to high-quality PNG at 6144px wide.</p>
       </form>
 
       <form method="post" action="{{ url_for('apply_mapping', job_id=job_id) }}">
         <input type="hidden" name="patch_mode" value="embed_webp_75">
         <button type="submit" class="big-button">Embed as WEBP quality 75</button>
-        <p class="small-note">First create the 600 DPI PNG from each selected SVG/PDF replacement, then compress that PNG to WEBP with quality 75 for a smaller PPTX.</p>
+        <p class="small-note">Convert selected SVG/PDF replacements to high-quality PNG at 6144px wide, then compress to WEBP at quality 75 for a smaller PPTX.</p>
       </form>
     </div>
 

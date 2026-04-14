@@ -70,7 +70,7 @@ function createChoice(row, match, checked) {
     <img src="/job/${jobId}/preview/${encodeURIComponent(match.preview)}" alt="${match.key_name}">
     <div class="choice-meta">
       <div class="choice-title">${match.display_name || match.key_name}</div>
-      <div class="choice-sub">${match.replacement_kind} · ${match.key_ext} · distance ${match.distance}</div>
+      <div class="choice-sub">${match.replacement_kind} · ${match.key_ext} · a${match.ahash_distance} p${match.phash_distance} c${match.distance}</div>
     </div>`;
   wrap.appendChild(inner);
   return wrap;
