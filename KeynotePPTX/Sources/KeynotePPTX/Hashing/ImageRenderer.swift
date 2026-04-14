@@ -43,7 +43,30 @@ enum ImageRenderer {
         let scale = CGFloat(maxDim) / max(srcSize.width, srcSize.height)
         let targetW = max(1, Int(srcSize.width * scale))
         let targetH = max(1, Int(srcSize.height * scale))
-        return compositeOnWhite(nsImage: img, width: targetW, height: targetH)
+
+        // Render into NSBitmapImageRep via its native NSGraphicsContext, which is
+        // natively flipped (y=0 at top). _NSSVGImageRep applies its own internal
+        // Y-flip to convert SVG's top-down coordinates to the screen convention —
+        // using NSGraphicsContext(bitmapImageRep:) gives it exactly that environment.
+        // Using NSGraphicsContext(cgContext:flipped:true) causes a double-flip (upside-down)
+        // because both AppKit and the rep apply the same flip independently.
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: targetW, pixelsHigh: targetH,
+            bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0
+        ) else { return nil }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor.white.setFill()
+        NSBezierPath.fill(NSRect(x: 0, y: 0, width: targetW, height: targetH))
+        img.draw(in: NSRect(x: 0, y: 0, width: targetW, height: targetH))
+        NSGraphicsContext.restoreGraphicsState()
+
+        return rep.cgImage
     }
 
     // MARK: - PDF
@@ -158,18 +181,19 @@ enum ImageRenderer {
             guard srcSize.width > 0 else { return nil }
             let scale = CGFloat(width) / srcSize.width
             let h = max(1, Int(srcSize.height * scale))
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            guard let ctx = CGContext(
-                data: nil, width: width, height: h,
-                bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
-                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            guard let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: width, pixelsHigh: h,
+                bitsPerSample: 8, samplesPerPixel: 4,
+                hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0
             ) else { return nil }
-            let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: false)
             NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = nsCtx
-            img.draw(in: CGRect(x: 0, y: 0, width: width, height: h))
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            img.draw(in: NSRect(x: 0, y: 0, width: width, height: h))
             NSGraphicsContext.restoreGraphicsState()
-            return ctx.makeImage()
+            return rep.cgImage
 
         case "pdf":
             guard let pdfDoc = CGPDFDocument(url as CFURL),
