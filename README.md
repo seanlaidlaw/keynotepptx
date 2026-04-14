@@ -1,65 +1,135 @@
+# Keynote → PPTX Image Replacer
 
-# PPTX ↔ Keynote Image Mapper
+A local web app that replaces low-quality raster images in a PowerPoint file with the original high-quality assets from the Keynote source file it was exported from.
 
-A local Flask application for matching rasterized PowerPoint media back to original Keynote source assets.
+When Keynote exports to `.pptx`, vector graphics (PDF/SVG) and high-resolution images become downsampled rasters. This tool matches each PPTX media file back to its Keynote original using slide structure (XML) and perceptual image hashing, then patches the PPTX in place.
 
-## Features
+---
 
-- Opens a browser automatically on launch.
-- Shows a live progress bar while it:
-  - unzips the packages
-  - fingerprints Keynote assets
-  - fingerprints PPTX media
-  - compares perceptual hashes
-- Renders a review table for each PPT image.
-- Shows the best 3 candidate matches under each row.
-- Prefers SVG, else PDF-to-SVG, else higher-quality raster.
-- Supports an **Other** upload per row.
-- Saves a confirmed mapping CSV.
-- Patches the PPTX and updates XML relationship targets.
+## How it works
+
+1. Both files are unzipped and their media inventories are parsed.
+2. Keynote's internal protobuf (`.iwa`) files are decoded to map each image to its slide number.
+3. PPTX slide relationship XML is parsed to do the same on the PowerPoint side.
+4. Images that can be matched exactly by slide structure skip fingerprinting entirely.
+5. Remaining images are fingerprinted in parallel (ahash → phash → ColorMoment distance).
+6. A review UI lets you confirm, override, or skip each match.
+7. The confirmed replacements are embedded into a patched `.pptx` output.
+
+Slide master and layout images are excluded — only content slide images are replaced.
+
+---
+
+## Requirements
+
+### System dependencies
+
+Install these before the Python packages.
+
+**macOS (Homebrew):**
+
+```bash
+brew install librsvg pngquant poppler
+```
+
+| Tool | Purpose |
+|---|---|
+| `rsvg-convert` (librsvg) | SVG → PNG conversion |
+| `pngquant` | Lossy PNG compression after conversion |
+| `pdftocairo` (poppler) | PDF → SVG (vector_in_place mode) |
+
+---
 
 ## Install
 
+### With uv (recommended)
+
+[uv](https://docs.astral.sh/uv/) installs the tool globally and makes `keynotepptx` available as a command:
+
 ```bash
-python -m venv .venv
+uv tool install /path/to/keynotepptx
+```
+
+Or install directly from the project directory:
+
+```bash
+cd /path/to/keynotepptx
+uv tool install .
+```
+
+Then run from anywhere:
+
+```bash
+keynotepptx --pptx presentation.pptx --keynote presentation.key
+```
+
+To update after pulling changes:
+
+```bash
+uv tool install --reinstall .
+```
+
+### With pip / venv
+
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install .
+keynotepptx --pptx presentation.pptx --keynote presentation.key
 ```
 
-System dependency for PDF-to-SVG conversion:
+---
+
+## Running
+
+### Basic usage
 
 ```bash
-pdftocairo
+keynotepptx --pptx /path/to/presentation.pptx --keynote /path/to/presentation.key
 ```
 
-On macOS this is usually available via Poppler.
+A browser tab opens automatically at `http://127.0.0.1:5100`. Press **Ctrl-C** to stop.
 
-## Run
+If `--pptx` and `--keynote` are omitted, the web UI lets you upload both files on the start page.
 
-With a browser opening automatically:
+### All options
+
+| Flag | Default | Description |
+|---|---|---|
+| `--pptx` | — | Path to the PowerPoint file |
+| `--keynote` | — | Path to the Keynote file |
+| `--mapping-csv` | — | Pre-load a confirmed mapping CSV from a previous run |
+| `--host` | `127.0.0.1` | Host to bind the server to |
+| `--port` | `5100` | Port to bind the server to |
+| `--no-browser` | off | Don't open a browser tab on start |
+
+### Re-using a previous mapping
+
+After patching, a `confirmed_mapping.csv` is saved alongside the output PPTX. Pass it back on the next run to pre-populate all review choices:
 
 ```bash
-python app.py --pptx /path/to/PhD_Seminar.pptx --keynote "/path/to/Presentation.key"
+keynotepptx \
+  --pptx /path/to/presentation.pptx \
+  --keynote /path/to/presentation.key \
+  --mapping-csv /path/to/confirmed_mapping.csv
 ```
 
-Or start without auto-opening:
+---
 
-```bash
-python app.py --no-browser
-```
+## Patch modes
 
-Then go to the URL shown in the terminal.
+After reviewing image matches, choose how replacements are embedded:
 
+| Mode | Description |
+|---|---|
+| **Embed vector images** | SVG files are embedded directly. PDF replacements are converted to SVG first. |
+| **Embed as high quality PNG** | SVG/PDF replacements are rasterised to PNG at 2560 px wide using `rsvg-convert` / PyMuPDF, then compressed with `pngquant`. |
+| **Embed as WEBP quality 75** | Same as PNG but converted to WebP at quality 75 for smaller file sizes. |
 
-## New features
+Raster replacements (PNG, JPEG, TIFF) are embedded as-is regardless of mode. Transparency is preserved in all modes.
 
-- Optional `confirmed_mapping.csv` input to pre-load previous choices.
-- Two patch modes:
-  - `vector_in_place`: keep SVG replacements as SVG and convert PDF to SVG.
-  - `embed_png_600`: convert selected SVG/PDF assets to 600 DPI PNG before embedding.
+---
 
-Autostart example:
+## Output
 
-```bash
-python app.py --pptx /path/to/file.pptx --keynote /path/to/file.key --mapping-csv /path/to/confirmed_mapping.csv
-```
+The patched file is downloaded automatically from the browser when processing completes. A CSV report listing every replacement (or skip) is also available for download.

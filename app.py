@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-import cairosvg
 try:
     import cv2
 except ImportError:
@@ -214,12 +213,13 @@ def render_to_image(path: Path, max_size: int = 768, normalize_for_hashing: bool
         img = Image.open(path)
         img.load()
     elif ext == '.svg':
-        png_bytes = cairosvg.svg2png(
-            url=str(path),
-            output_width=max_size,
-            background_color='white'
+        proc = subprocess.run(
+            ['rsvg-convert', '-w', str(max_size), str(path)],
+            capture_output=True
         )
-        img = Image.open(io.BytesIO(png_bytes))
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.decode(errors='replace').strip() or 'rsvg-convert failed')
+        img = Image.open(io.BytesIO(proc.stdout))
     elif ext == '.pdf':
         doc = fitz.open(str(path))
         page = doc.load_page(0)
@@ -1356,7 +1356,7 @@ def maybe_autostart_job(args: argparse.Namespace) -> str | None:
     return create_job_from_files(pptx, keynote, mapping)
 
 
-if __name__ == '__main__':
+def main() -> None:
     import signal
     import socket
     from wsgiref.simple_server import make_server, WSGIServer
@@ -1387,3 +1387,7 @@ if __name__ == '__main__':
         server.serve_forever()
     except KeyboardInterrupt:
         server.shutdown()
+
+
+if __name__ == '__main__':
+    main()
