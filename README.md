@@ -1,30 +1,43 @@
 # Keynote → PPTX Image Replacer
 
-A local web app that replaces low-quality raster images in a PowerPoint file with the original high-quality assets from the Keynote source file it was exported from.
+**Restore high-quality Keynote assets into PPTX exports — replaces degraded rasters with original SVG, PDF, and full-resolution images via a local review UI.**
 
-When Keynote exports to `.pptx`, vector graphics (PDF/SVG) and high-resolution images become downsampled rasters. This tool matches each PPTX media file back to its Keynote original using slide structure (XML) and perceptual image hashing, then patches the PPTX in place.
+---
+
+## The problem
+
+When you export a Keynote presentation to PowerPoint, every vector graphic and high-resolution image is flattened into a compressed JPEG or PNG. The resulting PPTX can look noticeably softer or more pixelated than the Keynote original — especially for diagrams, charts, and figures that were originally SVG or PDF.
+
+There is no built-in way to reverse this. This tool automates it.
 
 ---
 
 ## How it works
 
-1. Both files are unzipped and their media inventories are parsed.
-2. Keynote's internal protobuf (`.iwa`) files are decoded to map each image to its slide number.
-3. PPTX slide relationship XML is parsed to do the same on the PowerPoint side.
-4. Images that can be matched exactly by slide structure skip fingerprinting entirely.
-5. Remaining images are fingerprinted in parallel (ahash → phash → ColorMoment distance).
-6. A review UI lets you confirm, override, or skip each match.
-7. The confirmed replacements are embedded into a patched `.pptx` output.
+1. Upload your `.pptx` and the `.key` file it was exported from.
+2. The tool parses both files — using slide structure XML and Keynote's internal protobuf data — to match each PPTX image back to its Keynote original.
+3. A review UI shows you each match. Confirm, switch to a different candidate, upload your own file, or skip.
+4. Choose an output format and download a patched PPTX with the originals embedded.
 
-Slide master and layout images are excluded — only content slide images are replaced.
+> **Important:** the `.pptx` must have been exported from the `.key` file. Matching an unrelated PPTX and Keynote file will produce poor results.
+
+---
+
+## Screenshots
+
+**Review mappings** — each PPTX image is shown alongside its best Keynote candidates. Matches found via slide structure are pre-selected automatically.
+
+![Review mappings UI](docs/screenshot_review.png)
+
+**Choose output mode** — pick how SVG/PDF replacements are embedded into the patched PPTX.
+
+![Choose output mode UI](docs/screenshot_export.png)
 
 ---
 
 ## Requirements
 
 ### System dependencies
-
-Install these before the Python packages.
 
 **macOS (Homebrew):**
 
@@ -36,7 +49,9 @@ brew install librsvg pngquant poppler
 |---|---|
 | `rsvg-convert` (librsvg) | SVG → PNG conversion |
 | `pngquant` | Lossy PNG compression after conversion |
-| `pdftocairo` (poppler) | PDF → SVG (vector_in_place mode) |
+| `pdftocairo` (poppler) | PDF → SVG (vector embed mode) |
+
+**Linux:** the same tools are available via `apt` / `dnf`. Windows is not currently supported.
 
 ---
 
@@ -47,26 +62,13 @@ brew install librsvg pngquant poppler
 [uv](https://docs.astral.sh/uv/) installs the tool globally and makes `keynotepptx` available as a command:
 
 ```bash
-uv tool install /path/to/keynotepptx
+uv tool install git+https://github.com/seanlaidlaw/keynotepptx
 ```
 
-Or install directly from the project directory:
+To update to the latest version:
 
 ```bash
-cd /path/to/keynotepptx
-uv tool install .
-```
-
-Then run from anywhere:
-
-```bash
-keynotepptx --pptx presentation.pptx --keynote presentation.key
-```
-
-To update after pulling changes:
-
-```bash
-uv tool install --reinstall .
+uv tool install --reinstall git+https://github.com/seanlaidlaw/keynotepptx
 ```
 
 ### With pip / venv
@@ -74,23 +76,20 @@ uv tool install --reinstall .
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install .
-keynotepptx --pptx presentation.pptx --keynote presentation.key
+pip install git+https://github.com/seanlaidlaw/keynotepptx
 ```
 
 ---
 
 ## Running
 
-### Basic usage
-
 ```bash
 keynotepptx --pptx /path/to/presentation.pptx --keynote /path/to/presentation.key
 ```
 
-A browser tab opens automatically at `http://127.0.0.1:5100`. Press **Ctrl-C** to stop.
+A browser tab opens automatically. Press **Ctrl-C** to stop the server.
 
-If `--pptx` and `--keynote` are omitted, the web UI lets you upload both files on the start page.
+If `--pptx` and `--keynote` are omitted, the web UI lets you upload both files on the start page. The port defaults to 5000 and advances automatically if that port is already in use.
 
 ### All options
 
@@ -99,13 +98,13 @@ If `--pptx` and `--keynote` are omitted, the web UI lets you upload both files o
 | `--pptx` | — | Path to the PowerPoint file |
 | `--keynote` | — | Path to the Keynote file |
 | `--mapping-csv` | — | Pre-load a confirmed mapping CSV from a previous run |
-| `--host` | `127.0.0.1` | Host to bind the server to |
-| `--port` | `5100` | Port to bind the server to |
+| `--host` | `0.0.0.0` | Host to bind the server to |
+| `--port` | `5000` | Starting port (advances automatically if in use) |
 | `--no-browser` | off | Don't open a browser tab on start |
 
 ### Re-using a previous mapping
 
-After patching, a `confirmed_mapping.csv` is saved alongside the output PPTX. Pass it back on the next run to pre-populate all review choices:
+After patching, a `confirmed_mapping.csv` is saved alongside the output PPTX. Pass it back on the next run to restore all your previous choices:
 
 ```bash
 keynotepptx \
@@ -118,18 +117,18 @@ keynotepptx \
 
 ## Patch modes
 
-After reviewing image matches, choose how replacements are embedded:
+After reviewing matches, choose how replacements are embedded:
 
-| Mode | Description |
-|---|---|
-| **Embed vector images** | SVG files are embedded directly. PDF replacements are converted to SVG first. |
-| **Embed as high quality PNG** | SVG/PDF replacements are rasterised to PNG at 2560 px wide using `rsvg-convert` / PyMuPDF, then compressed with `pngquant`. |
-| **Embed as WEBP quality 75** | Same as PNG but converted to WebP at quality 75 for smaller file sizes. |
+| Mode | Best for | Description |
+|---|---|---|
+| **Embed vector images** | Smallest file, infinite scalability | SVG files embedded directly; PDFs converted to SVG first. Choose this if your PPTX viewer supports embedded SVG (PowerPoint for Mac/Windows does). |
+| **Embed as high quality PNG** | Maximum compatibility | SVG/PDF rasterised to PNG at 2560 px wide, compressed with pngquant. Use this if you need the file to open correctly everywhere. |
+| **Embed as WEBP quality 75** | Smaller file size | Same as PNG but converted to WebP at quality 75. Smaller PPTX but slower to open in PowerPoint. |
 
-Raster replacements (PNG, JPEG, TIFF) are embedded as-is regardless of mode. Transparency is preserved in all modes.
+Raster replacements (JPEG, TIFF, etc.) are embedded as-is regardless of the mode chosen. Transparency is preserved in all modes.
 
 ---
 
 ## Output
 
-The patched file is downloaded automatically from the browser when processing completes. A CSV report listing every replacement (or skip) is also available for download.
+The patched PPTX downloads automatically from the browser when processing completes. A CSV report listing every replacement and its source is also available for download.
