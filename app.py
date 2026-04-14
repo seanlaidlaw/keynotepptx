@@ -1361,14 +1361,15 @@ def main() -> None:
     import socket
     from wsgiref.simple_server import make_server, WSGIServer
 
-    args = parse_args()
-    job_id = maybe_autostart_job(args)
-    browser_host = '127.0.0.1' if args.host == '0.0.0.0' else args.host
-    url = f'http://{browser_host}:{args.port}/'
-    if job_id:
-        url = f'http://{browser_host}:{args.port}/job/{job_id}'
-    if not args.no_browser:
-        launch_browser(url)
+    def _find_free_port(host: str, start: int) -> int:
+        for port in range(start, start + 100):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                try:
+                    s.bind((host, port))
+                    return port
+                except OSError:
+                    continue
+        raise RuntimeError(f'No free port found in range {start}–{start + 99}')
 
     class ReusableServer(WSGIServer):
         allow_reuse_address = True
@@ -1381,7 +1382,21 @@ def main() -> None:
                     pass
             super().server_bind()
 
-    server = make_server(args.host, args.port, app, server_class=ReusableServer)
+    args = parse_args()
+    port = _find_free_port(args.host, args.port)
+    if port != args.port:
+        print(f'Port {args.port} in use, using {port} instead.')
+
+    job_id = maybe_autostart_job(args)
+    browser_host = '127.0.0.1' if args.host == '0.0.0.0' else args.host
+    url = f'http://{browser_host}:{port}/'
+    if job_id:
+        url = f'http://{browser_host}:{port}/job/{job_id}'
+    print(f'Serving on {url}')
+    if not args.no_browser:
+        launch_browser(url)
+
+    server = make_server(args.host, port, app, server_class=ReusableServer)
     signal.signal(signal.SIGTERM, lambda *_: server.shutdown())
     try:
         server.serve_forever()
