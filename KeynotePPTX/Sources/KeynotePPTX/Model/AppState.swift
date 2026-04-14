@@ -64,13 +64,11 @@ final class AppState {
         }
 
         do {
-            let result = try await Task.detached(priority: .userInitiated) {
-                try await ProcessingPipeline.run(
-                    pptxURL: pptxURL,
-                    keynoteURL: keynoteURL,
-                    progress: progressCallback
-                )
-            }.value
+            let result = try await ProcessingPipeline.run(
+                pptxURL: pptxURL,
+                keynoteURL: keynoteURL,
+                progress: progressCallback
+            )
 
             self.mappingRows = result.rows
             self.pptxExtractDir = result.pptxDir
@@ -99,15 +97,13 @@ final class AppState {
         }
 
         do {
-            let outputURL = try await Task.detached(priority: .userInitiated) {
-                try await PPTXPatcher.apply(
-                    rows: rows,
-                    pptxExtractDir: pptxExtractDir,
-                    originalPPTXName: pptxURL.deletingPathExtension().lastPathComponent,
-                    patchMode: mode,
-                    progress: progressCallback
-                )
-            }.value
+            let outputURL = try await PPTXPatcher.apply(
+                rows: rows,
+                pptxExtractDir: pptxExtractDir,
+                originalPPTXName: pptxURL.deletingPathExtension().lastPathComponent,
+                patchMode: mode,
+                progress: progressCallback
+            )
 
             self.phase = .done(outputURL: outputURL)
         } catch {

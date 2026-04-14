@@ -108,8 +108,8 @@ struct QualityBadge: View {
             .font(.caption2.bold())
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Color(nsColor: quality.color).opacity(0.15))
-            .foregroundStyle(Color(nsColor: quality.color))
+            .background(quality.color.opacity(0.15))
+            .foregroundStyle(quality.color)
             .clipShape(Capsule())
     }
 }

@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+import SwiftUI
 
 // MARK: - Input items
 
@@ -88,13 +88,13 @@ enum MatchQuality: String, Sendable {
         }
     }
 
-    var color: NSColor {
+    var color: Color {
         switch self {
-        case .xmlExact, .exact: return .systemGreen
-        case .strong: return .systemBlue
-        case .review: return .systemYellow
-        case .poor: return .systemOrange
-        case .noMatch: return .systemRed
+        case .xmlExact, .exact: return .green
+        case .strong: return .blue
+        case .review: return .yellow
+        case .poor: return .orange
+        case .noMatch: return .red
         }
     }
 }

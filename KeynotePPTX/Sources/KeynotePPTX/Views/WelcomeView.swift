@@ -21,8 +21,8 @@ struct WelcomeView: View {
                     icon: "doc.richtext",
                     filename: appState.pptxURL?.lastPathComponent,
                     accepted: ["pptx"],
-                    onDrop: { url in appState.pptxURL = url },
-                    onBrowse: { Task { appState.pptxURL = await pickFile(types: [UTType(filenameExtension: "pptx")!]) } }
+                    onDrop: { appState.pptxURL = $0 },
+                    onBrowse: { Task { appState.pptxURL = await pickFile(types: [.pptx]) } }
                 )
 
                 DropZone(
@@ -30,21 +30,18 @@ struct WelcomeView: View {
                     icon: "doc.text",
                     filename: appState.keynoteURL?.lastPathComponent,
                     accepted: ["key"],
-                    onDrop: { url in appState.keynoteURL = url },
-                    onBrowse: { Task { appState.keynoteURL = await pickFile(types: [UTType(filenameExtension: "key")!]) } }
+                    onDrop: { appState.keynoteURL = $0 },
+                    onBrowse: { Task { appState.keynoteURL = await pickFile(types: [.keynote]) } }
                 )
             }
             .frame(maxWidth: 720)
 
-            Button(action: {
+            Button("Process") {
                 Task { await appState.startProcessing() }
-            }) {
-                Text("Process")
-                    .font(.headline)
-                    .frame(width: 200)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .frame(width: 200)
             .disabled(appState.pptxURL == nil || appState.keynoteURL == nil)
 
             Spacer()
@@ -63,6 +60,13 @@ struct WelcomeView: View {
             }
         }
     }
+}
+
+// MARK: - UTType constants
+
+private extension UTType {
+    static let pptx = UTType(filenameExtension: "pptx") ?? .data
+    static let keynote = UTType(filenameExtension: "key") ?? .package
 }
 
 // MARK: - Drop zone component
@@ -102,17 +106,19 @@ private struct DropZone: View {
                 .controlSize(.small)
         }
         .frame(width: 280, height: 180)
-        .background(
+        .background {
             RoundedRectangle(cornerRadius: 12)
                 .fill(isTargeted
                       ? Color.accentColor.opacity(0.1)
                       : Color(nsColor: .quaternaryLabelColor).opacity(0.3))
-        )
-        .overlay(
+        }
+        .overlay {
             RoundedRectangle(cornerRadius: 12)
-                .stroke(isTargeted ? Color.accentColor : Color.secondary.opacity(0.3),
-                        style: StrokeStyle(lineWidth: 2, dash: isTargeted ? [] : [6, 4]))
-        )
+                .stroke(
+                    isTargeted ? Color.accentColor : Color.secondary.opacity(0.3),
+                    style: StrokeStyle(lineWidth: 2, dash: isTargeted ? [] : [6, 4])
+                )
+        }
         .onDrop(of: [.fileURL], isTargeted: $isTargeted, perform: handleDrop)
     }
 
@@ -126,7 +132,7 @@ private struct DropZone: View {
             let urlStr = String(data: data, encoding: .utf8) ?? ""
             guard let url = URL(string: urlStr),
                   exts.contains(url.pathExtension.lowercased()) else { return }
-            DispatchQueue.main.async { cb(url) }
+            Task { @MainActor in cb(url) }
         }
         return true
     }

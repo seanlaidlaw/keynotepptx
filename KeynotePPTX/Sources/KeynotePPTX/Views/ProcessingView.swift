@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ProcessingView: View {
     @Environment(AppState.self) private var appState
-    var title: String = "Processing…"
 
     var body: some View {
         VStack(spacing: 24) {
@@ -15,7 +14,7 @@ struct ProcessingView: View {
                 .foregroundStyle(.secondary)
                 .animation(.default, value: appState.progressDetail)
 
-            Text(String(format: "%.0f%%", appState.progress * 100))
+            Text(appState.progress, format: .percent.precision(.fractionLength(0)))
                 .font(.largeTitle.monospacedDigit())
                 .foregroundStyle(.primary)
         }

@@ -31,7 +31,7 @@ struct RootView: View {
         case .patchOptions:
             PatchOptionsView()
         case .patching:
-            ProcessingView(title: "Applying replacements…")
+            ProcessingView()
         case .done(let url):
             DoneView(outputURL: url)
         case .error(let msg):
