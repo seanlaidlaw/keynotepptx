@@ -1,0 +1,13 @@
+name: keynotepptx
+channels:
+  - conda-forge
+dependencies:
+  - cairosvg
+  - flask
+  - pymupdf
+  - python==3.10
+  - pip:
+    - ipykernel==6.29.5
+    - nltk==3.8.1
+
+prefix: "/Users/sl31/miniforge3/envs/keynotepptx"
