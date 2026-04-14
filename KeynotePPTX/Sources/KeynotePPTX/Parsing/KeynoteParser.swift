@@ -81,7 +81,8 @@ enum KeynoteParser {
                 let filename = url.lastPathComponent
                 let ext = url.pathExtension.lowercased()
                 let imageExtensions: Set<String> = ["svg", "pdf", "png", "jpg", "jpeg", "tiff", "tif", "gif", "bmp", "webp", "heic"]
-                guard imageExtensions.contains(ext) else { continue }
+                guard imageExtensions.contains(ext),
+                      !SlideGraphTraversal.isIgnoredPreview(filename) else { continue }
                 let objectID = SlideGraphTraversal.extractDataRefID(from: filename).map { String($0) } ?? ""
                 let slides = slideMedia[filename] ?? []
                 items.append(KeynoteMediaItem(

@@ -10,17 +10,7 @@ struct ReviewView: View {
     @Environment(AppState.self) private var appState
     @State private var filter: ReviewFilter = .all
     @State private var showPatchOptions = false
-
-    private var filteredIndices: [Int] {
-        appState.mappingRows.indices.filter { i in
-            let row = appState.mappingRows[i]
-            switch filter {
-            case .all: return true
-            case .needsReview: return row.selectedChoice == .skip && !row.topCandidates.isEmpty
-            case .confirmed: return row.selectedChoice != .skip
-            }
-        }
-    }
+    @State private var filteredIndices: [Int] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,16 +55,38 @@ struct ReviewView: View {
 
             // Row list
             ScrollView {
-                LazyVStack(spacing: 0, pinnedViews: []) {
+                LazyVStack(spacing: 8, pinnedViews: []) {
                     ForEach(filteredIndices, id: \.self) { i in
                         ReviewRowView(rowIndex: i)
-                        Divider()
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                            }
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
             }
         }
         .sheet(isPresented: $showPatchOptions) {
             PatchOptionsView()
+        }
+        .task { updateFilteredIndices() }
+        .onChange(of: filter) { updateFilteredIndices() }
+        .onChange(of: appState.confirmedCount) { updateFilteredIndices() }
+        .onChange(of: appState.mappingRows.count) { updateFilteredIndices() }
+    }
+
+    private func updateFilteredIndices() {
+        filteredIndices = appState.mappingRows.indices.filter { i in
+            let row = appState.mappingRows[i]
+            switch filter {
+            case .all:         return true
+            case .needsReview: return row.selectedChoice == .skip && !row.topCandidates.isEmpty
+            case .confirmed:   return row.selectedChoice != .skip
+            }
         }
     }
 }

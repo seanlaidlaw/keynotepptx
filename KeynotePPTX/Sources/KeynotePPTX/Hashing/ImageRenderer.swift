@@ -1,6 +1,5 @@
 import Foundation
 import AppKit
-import PDFKit
 import CoreGraphics
 
 /// Renders any source image file (SVG, PDF, raster) to a CGImage.
@@ -49,10 +48,13 @@ enum ImageRenderer {
 
     // MARK: - PDF
 
+    /// Render using raw CoreGraphics (CGPDFDocument / CGContext.drawPDFPage) rather than
+    /// PDFKit's display pipeline, which applies screen-optimised anti-aliasing and minimum
+    /// stroke widths that produce different line thicknesses than other renderers.
     private static func renderPDF(url: URL, maxDim: Int) -> CGImage? {
-        guard let pdfDoc = PDFDocument(url: url),
-              let page = pdfDoc.page(at: 0) else { return nil }
-        let pageRect = page.bounds(for: .mediaBox)
+        guard let pdfDoc = CGPDFDocument(url as CFURL),
+              let page = pdfDoc.page(at: 1) else { return nil }   // CGPDFDocument is 1-indexed
+        let pageRect = cgPDFVisibleRect(page)
         guard pageRect.width > 0, pageRect.height > 0 else { return nil }
         let scale = CGFloat(maxDim) / max(pageRect.width, pageRect.height)
         let targetW = max(1, Int(pageRect.width * scale))
@@ -69,17 +71,27 @@ enum ImageRenderer {
         ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: targetW, height: targetH))
 
-        // Draw PDF page scaled to target size
         ctx.saveGState()
+        // Scale and shift so the visible rect (cropBox) maps to pixel (0,0).
+        // CGPDFPage uses bottom-left origin matching CGContext, so no Y-flip needed.
         ctx.scaleBy(x: scale, y: scale)
-        let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: false)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = nsCtx
-        page.draw(with: .mediaBox, to: ctx)
-        NSGraphicsContext.restoreGraphicsState()
+        ctx.translateBy(x: -pageRect.origin.x, y: -pageRect.origin.y)
+        ctx.drawPDFPage(page)
         ctx.restoreGState()
 
         return ctx.makeImage()
+    }
+
+    /// Returns the effective visible rect for a PDF page: cropBox when meaningfully
+    /// smaller than mediaBox (respecting PDF cropping), otherwise mediaBox.
+    /// Mirrors PyMuPDF's page.rect which returns the cropBox by default.
+    private static func cgPDFVisibleRect(_ page: CGPDFPage) -> CGRect {
+        let media = page.getBoxRect(.mediaBox)
+        let crop  = page.getBoxRect(.cropBox)
+        if crop.width > 1 && crop.height > 1 && crop != media {
+            return crop
+        }
+        return media
     }
 
     // MARK: - White-background compositing
@@ -160,9 +172,9 @@ enum ImageRenderer {
             return ctx.makeImage()
 
         case "pdf":
-            guard let pdfDoc = PDFDocument(url: url),
-                  let page = pdfDoc.page(at: 0) else { return nil }
-            let pageRect = page.bounds(for: .mediaBox)
+            guard let pdfDoc = CGPDFDocument(url as CFURL),
+                  let page = pdfDoc.page(at: 1) else { return nil }
+            let pageRect = cgPDFVisibleRect(page)
             guard pageRect.width > 0 else { return nil }
             let scale = CGFloat(width) / pageRect.width
             let h = max(1, Int(pageRect.height * scale))
@@ -174,7 +186,8 @@ enum ImageRenderer {
             ) else { return nil }
             ctx.saveGState()
             ctx.scaleBy(x: scale, y: scale)
-            page.draw(with: .mediaBox, to: ctx)
+            ctx.translateBy(x: -pageRect.origin.x, y: -pageRect.origin.y)
+            ctx.drawPDFPage(page)
             ctx.restoreGState()
             return ctx.makeImage()
 

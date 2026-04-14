@@ -14,7 +14,7 @@ struct PatchOptionsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("\(s.total) total images", systemImage: "photo.stack")
                     Label("\(s.skipped) skipped", systemImage: "minus.circle")
-                    Label("\(s.vectors) vector replacements (SVG/PDF)", systemImage: "waveform.path")
+                    Label("\(s.vectors) vector replacements (SVG/PDF)", systemImage: "lasso")
                     Label("\(s.rasters) raster replacements", systemImage: "photo")
                 }
                 .font(.subheadline)

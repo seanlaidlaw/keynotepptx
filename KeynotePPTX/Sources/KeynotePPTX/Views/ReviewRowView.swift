@@ -9,28 +9,40 @@ struct ReviewRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
-            // Left panel: PPTX image info (fixed width)
-            VStack(alignment: .leading, spacing: 8) {
-                ThumbnailView(data: row.pptxFingerprint.thumbnailData)
-                    .frame(width: 200, height: 140)
+            // Left panel: PPTX source image (fixed width, visually distinct)
+            VStack(alignment: .leading, spacing: 0) {
+                // Header strip
+                Label("PowerPoint", systemImage: "doc.richtext.fill")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.accentColor)
 
-                Text(row.pptxItem.filename)
-                    .font(.caption.monospaced())
-                    .lineLimit(2)
-                    .truncationMode(.middle)
+                VStack(alignment: .leading, spacing: 8) {
+                    ThumbnailView(data: row.pptxFingerprint.thumbnailData)
+                        .frame(width: 200, height: 110)
 
-                HStack(spacing: 4) {
-                    QualityBadge(quality: row.quality)
-                    if !row.pptxItem.slideNumbers.isEmpty {
-                        Text("Slide \(row.pptxItem.slideNumbers.map(String.init).joined(separator: ", "))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                    Text(row.pptxItem.filename)
+                        .font(.caption.monospaced())
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+
+                    HStack(spacing: 4) {
+                        QualityBadge(quality: row.quality)
+                        if !row.pptxItem.slideNumbers.isEmpty {
+                            Text("Slide \(row.pptxItem.slideNumbers.map(String.init).joined(separator: ", "))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
+                .padding(10)
+                .frame(maxHeight: .infinity, alignment: .top)
             }
             .frame(width: 240)
-            .padding(12)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(Color.accentColor.opacity(0.06))
 
             Divider()
 
@@ -95,48 +107,5 @@ struct ReviewRowView: View {
                 continuation.resume(returning: response == .OK ? panel.url : nil)
             }
         }
-    }
-}
-
-// MARK: - Quality badge
-
-struct QualityBadge: View {
-    let quality: MatchQuality
-
-    var body: some View {
-        Text(quality.label)
-            .font(.caption2.bold())
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(quality.color.opacity(0.15))
-            .foregroundStyle(quality.color)
-            .clipShape(Capsule())
-    }
-}
-
-// MARK: - Thumbnail helper
-
-struct ThumbnailView: View {
-    let data: Data?
-
-    var nsImage: NSImage? {
-        data.flatMap { NSImage(data: $0) }
-    }
-
-    var body: some View {
-        Group {
-            if let img = nsImage {
-                Image(nsImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-            } else {
-                Image(systemName: "photo")
-                    .font(.largeTitle)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color(nsColor: .quaternaryLabelColor).opacity(0.2))
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }

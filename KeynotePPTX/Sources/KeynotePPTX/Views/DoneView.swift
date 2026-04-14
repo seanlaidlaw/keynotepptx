@@ -1,13 +1,16 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct DoneView: View {
     @Environment(AppState.self) private var appState
     let outputURL: URL
+    @State private var showingExporter = false
     @State private var saved = false
+    @State private var saveError: String?
 
     var body: some View {
         VStack(spacing: 24) {
-            Image(systemName: saved ? "checkmark.circle.fill" : "doc.badge.checkmark")
+            Image(systemName: saved ? "checkmark.circle.fill" : "arrow.down.doc.fill")
                 .font(.system(size: 64))
                 .foregroundStyle(saved ? .green : .accentColor)
 
@@ -19,11 +22,9 @@ struct DoneView: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 16) {
-                Button("Save as…") {
-                    Task { await saveFile() }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                Button("Save as…") { showingExporter = true }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
 
                 Button("Reveal in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([outputURL])
@@ -44,24 +45,48 @@ struct DoneView: View {
         }
         .padding(48)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func saveFile() async {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = outputURL.lastPathComponent
-        panel.allowedContentTypes = [.init(filenameExtension: "pptx")!]
-        let response = await panel.beginSheetModal(for: NSApp.keyWindow ?? NSWindow())
-        guard response == .OK, let dest = panel.url else { return }
-        do {
-            try? FileManager.default.removeItem(at: dest)
-            try FileManager.default.copyItem(at: outputURL, to: dest)
-            saved = true
-        } catch {
-            // Show alert
-            let alert = NSAlert()
-            alert.messageText = "Save failed"
-            alert.informativeText = error.localizedDescription
-            await alert.beginSheetModal(for: NSApp.keyWindow ?? NSWindow())
+        .fileExporter(
+            isPresented: $showingExporter,
+            document: PPTXFile(url: outputURL),
+            contentType: .pptx,
+            defaultFilename: outputURL.lastPathComponent
+        ) { result in
+            switch result {
+            case .success:
+                saved = true
+            case .failure(let error):
+                saveError = error.localizedDescription
+            }
+        }
+        .alert(
+            "Save failed",
+            isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } }),
+            presenting: saveError
+        ) { _ in
+            Button("OK") { saveError = nil }
+        } message: { msg in
+            Text(msg)
         }
     }
+}
+
+// MARK: - FileDocument wrapper for export
+
+private struct PPTXFile: FileDocument {
+    static var readableContentTypes: [UTType] { [.pptx] }
+    let sourceURL: URL
+
+    init(url: URL) { sourceURL = url }
+
+    init(configuration: ReadConfiguration) throws {
+        sourceURL = URL(fileURLWithPath: "")
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        try FileWrapper(url: sourceURL, options: [])
+    }
+}
+
+private extension UTType {
+    static let pptx = UTType(filenameExtension: "pptx") ?? .data
 }

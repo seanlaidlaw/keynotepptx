@@ -127,16 +127,19 @@ struct SlideGraphTraversal {
 
     // MARK: - Preview filter
 
-    // Matches Python isIgnoredPreview: skip small previews and st-UUID-N.ext thumbnails
-    private static let stPreviewPattern = try! NSRegularExpression(
-        pattern: #"^st-[0-9A-Fa-f-]+-\d+\.(png|jpe?g|tiff?|gif|bmp|webp)$"#,
+    // Matches st-<hash>-N.ext and mt-<hash>-N.ext thumbnail patterns.
+    // Python filters st- via is_keynote_ignored_preview; mt- thumbnails (master-slide previews)
+    // have the same format and must also be excluded to prevent them from contaminating
+    // slide-media mapping and xml_exact candidate counts.
+    private static let thumbnailPreviewPattern = try! NSRegularExpression(
+        pattern: #"^(st|mt)-[0-9A-Fa-f-]+-\d+\.(png|jpe?g|tiff?|gif|bmp|webp)$"#,
         options: .caseInsensitive
     )
 
-    private static func isIgnoredPreview(_ filename: String) -> Bool {
+    static func isIgnoredPreview(_ filename: String) -> Bool {
         if filename.contains("-small-") { return true }
         let range = NSRange(filename.startIndex..., in: filename)
-        return stPreviewPattern.firstMatch(in: filename, range: range) != nil
+        return thumbnailPreviewPattern.firstMatch(in: filename, range: range) != nil
     }
 }
 
