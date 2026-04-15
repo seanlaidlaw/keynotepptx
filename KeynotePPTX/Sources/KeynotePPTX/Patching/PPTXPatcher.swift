@@ -143,9 +143,12 @@ enum PPTXPatcher {
         }
 
         // --- Rezip ---
+        // Output lives alongside pptx/ and keynote/ in the session cache directory
+        // so the user can inspect all files from the most recent run.
         progress(0.92, "Packaging output…")
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(originalPPTXName)_patched.pptx")
+        let outputDir = pptxExtractDir.deletingLastPathComponent().appendingPathComponent("output")
+        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        let outputURL = outputDir.appendingPathComponent("\(originalPPTXName)_patched.pptx")
         try await ZipTools.rezip(directory: pptxExtractDir, to: outputURL)
 
         progress(1.0, "Done")

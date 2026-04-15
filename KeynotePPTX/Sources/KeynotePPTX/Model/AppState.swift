@@ -131,9 +131,31 @@ enum ProcessingPipeline {
     ) async throws -> PipelineResult {
 
         let fm = FileManager.default
-        let tmp = fm.temporaryDirectory
-        let pptxDir = tmp.appendingPathComponent("kp_pptx_" + UUID().uuidString)
-        let keynoteDir = tmp.appendingPathComponent("kp_key_" + UUID().uuidString)
+
+        // Mirror the Python app: persist extracted and output files in
+        // ~/Library/Caches/KeynotePPTX/<uuid>/ so they are inspectable after each run.
+        // UUIDs avoid collisions when the same files are processed multiple times.
+        // Keep only the 10 most-recent sessions; remove older ones.
+        let caches = fm.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let appCacheDir = caches.appendingPathComponent("KeynotePPTX")
+        try? fm.createDirectory(at: appCacheDir, withIntermediateDirectories: true)
+
+        let sessionDir = appCacheDir.appendingPathComponent(UUID().uuidString)
+        let pptxDir = sessionDir.appendingPathComponent("pptx")
+        let keynoteDir = sessionDir.appendingPathComponent("keynote")
+
+        // Prune old sessions — keep the 10 most recent by creation date
+        if let existing = try? fm.contentsOfDirectory(
+            at: appCacheDir, includingPropertiesForKeys: [.creationDateKey],
+            options: .skipsHiddenFiles
+        ) {
+            let sorted = existing.compactMap { url -> (URL, Date)? in
+                guard let d = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate else { return nil }
+                return (url, d)
+            }.sorted { $0.1 > $1.1 }
+
+            for (url, _) in sorted.dropFirst(10) { try? fm.removeItem(at: url) }
+        }
 
         // 1. Unzip both in parallel
         try await withThrowingTaskGroup(of: Void.self) { group in
