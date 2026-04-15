@@ -8,23 +8,23 @@ struct ReviewRowView: View {
     private var row: MappingRow { appState.mappingRows[rowIndex] }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            // Left panel: PPTX source image (fixed width, visually distinct)
+        HStack(alignment: .top, spacing: 20) {
+            // Left: floating "Low quality image" box — taller, self-contained card
             VStack(alignment: .leading, spacing: 0) {
-                // Header strip
+                // Header strip — 50% more vertical padding than before (top: 9→14, bottom: 6→9)
                 Label("Low quality image", systemImage: "photo")
-                    .font(.caption2.bold())
+                    .font(.callout.bold())
                     .foregroundStyle(.white)
-                    .padding(EdgeInsets(top: 9, leading: 10, bottom: 6, trailing: 10))
+                    .padding(EdgeInsets(top: 14, leading: 10, bottom: 9, trailing: 10))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.accentColor)
 
                 VStack(alignment: .leading, spacing: 8) {
                     ThumbnailView(data: row.pptxFingerprint.thumbnailData)
-                        .frame(width: 200, height: 110)
+                        .frame(width: 200, height: 145)
 
                     Text(row.pptxItem.filename)
-                        .font(.caption.monospaced())
+                        .font(.callout.monospaced())
                         .lineLimit(2)
                         .truncationMode(.middle)
 
@@ -32,7 +32,7 @@ struct ReviewRowView: View {
                         QualityBadge(quality: row.quality)
                         if !row.pptxItem.slideNumbers.isEmpty {
                             Text("Slide \(row.pptxItem.slideNumbers.map(String.init).joined(separator: ", "))")
-                                .font(.caption2)
+                                .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -41,11 +41,14 @@ struct ReviewRowView: View {
                 .frame(maxHeight: .infinity, alignment: .top)
             }
             .frame(width: 240)
-            .background(Color.accentColor.opacity(0.06))
+            .background(Color.accentColor.opacity(0.10))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.accentColor.opacity(0.25), lineWidth: 1)
+            }
 
-            Divider()
-
-            // Right panel: candidates + actions
+            // Right: candidates + actions — shorter cards, no divider
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 12) {
                     ForEach(row.topCandidates) { candidate in
@@ -61,9 +64,9 @@ struct ReviewRowView: View {
 
                     if row.topCandidates.isEmpty {
                         Text("No candidates found")
-                            .font(.caption)
+                            .font(.body)
                             .foregroundStyle(.secondary)
-                            .frame(width: 160, height: 140)
+                            .frame(width: 140, height: 100)
                     }
 
                     VStack(spacing: 8) {
@@ -94,8 +97,9 @@ struct ReviewRowView: View {
                 }
                 .padding(12)
             }
+            .frame(maxWidth: .infinity)
         }
-        .frame(height: 200)
+        .padding(16)
     }
 
     private func pickFile() async -> URL? {

@@ -18,7 +18,7 @@ struct DoneView: View {
                 .font(.title2.bold())
 
             Text(outputURL.lastPathComponent)
-                .font(.subheadline.monospaced())
+                .font(.callout.monospaced())
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 16) {
@@ -41,7 +41,7 @@ struct DoneView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .font(.subheadline)
+            .font(.body)
         }
         .padding(48)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

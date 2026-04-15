@@ -22,7 +22,7 @@ struct KindBadge: View {
 
     var body: some View {
         Text(label)
-            .font(.caption.bold())
+            .font(.callout.bold())
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .background(color.opacity(0.15))

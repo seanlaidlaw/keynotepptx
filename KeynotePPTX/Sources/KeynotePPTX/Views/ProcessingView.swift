@@ -10,7 +10,7 @@ struct ProcessingView: View {
                 .frame(maxWidth: 480)
 
             Text(appState.progressDetail)
-                .font(.subheadline)
+                .font(.body)
                 .foregroundStyle(.secondary)
                 .animation(.default, value: appState.progressDetail)
 

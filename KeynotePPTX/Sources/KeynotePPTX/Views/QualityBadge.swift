@@ -5,7 +5,7 @@ struct QualityBadge: View {
 
     var body: some View {
         Text(quality.label)
-            .font(.caption2.bold())
+            .font(.callout.bold())
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(quality.color.opacity(0.15))

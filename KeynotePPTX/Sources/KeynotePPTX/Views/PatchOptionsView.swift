@@ -17,11 +17,11 @@ struct PatchOptionsView: View {
                     Label("\(s.vectors) vector replacements (SVG/PDF)", systemImage: "lasso")
                     Label("\(s.rasters) raster replacements", systemImage: "photo")
                 }
-                .font(.subheadline)
+                .font(.body)
             }
 
             Text("Vector mode affects SVG/PDF assets. Rasters are always copied as-is.")
-                .font(.caption)
+                .font(.body)
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 12) {
@@ -70,7 +70,7 @@ private struct ModeRow: View {
                     Text(mode.displayName)
                         .font(.headline)
                     Text(mode.detail)
-                        .font(.caption)
+                        .font(.body)
                         .foregroundStyle(.secondary)
                 }
             }

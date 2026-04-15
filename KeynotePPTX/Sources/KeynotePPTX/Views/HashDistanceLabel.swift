@@ -6,7 +6,7 @@ struct HashDistanceLabel: View {
     var body: some View {
         if distance < 64 {
             Text("Δ\(distance)")
-                .font(.caption.monospacedDigit())
+                .font(.callout.monospacedDigit())
                 .foregroundStyle(color)
         }
     }

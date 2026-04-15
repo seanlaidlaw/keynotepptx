@@ -10,7 +10,7 @@ struct WelcomeView: View {
                 Text("KeynotePPTX")
                     .font(.largeTitle.bold())
                 Text("Restore high-quality Keynote assets into PPTX exports")
-                    .font(.subheadline)
+                    .font(.body)
                     .foregroundStyle(.secondary)
             }
             .padding(.top, 32)
@@ -84,7 +84,7 @@ private struct DropZone: View {
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: filename != nil ? "checkmark.circle.fill" : icon)
-                .font(.system(size: 40))
+                .font(.system(.largeTitle))
                 .foregroundStyle(filename != nil ? Color.green : Color.secondary)
 
             Text(label)
@@ -92,13 +92,13 @@ private struct DropZone: View {
 
             if let name = filename {
                 Text(name)
-                    .font(.caption)
+                    .font(.body)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             } else {
                 Text("Drop here or browse")
-                    .font(.caption)
+                    .font(.body)
                     .foregroundStyle(.tertiary)
             }
 

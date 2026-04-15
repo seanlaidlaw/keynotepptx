@@ -19,7 +19,7 @@ struct ReviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Toolbar
+            // Toolbar — liquid glass material
             HStack(spacing: 16) {
                 Label("\(appState.confirmedCount) confirmed", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
@@ -54,23 +54,26 @@ struct ReviewView: View {
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
-            .background(.bar)
-
-            Divider()
+            .background(.ultraThinMaterial)
+            .overlay(alignment: .bottom) { Divider() }
 
             // Row list
             ScrollView {
-                LazyVStack(spacing: 8, pinnedViews: []) {
+                LazyVStack(spacing: 20, pinnedViews: []) {
                     ForEach(filteredIndices, id: \.self) { i in
                         ReviewRowView(rowIndex: i)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                            }
+                            .reviewCardStyle()
+                    }
+
+                    if !exactMatchIndices.isEmpty {
+                        ExactMatchesSectionView(
+                            indices: exactMatchIndices,
+                            isExpanded: $showExactMatches
+                        )
+                        .padding(.top, 4)
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 24)
                 .padding(.top, 16)
                 .padding(.bottom, 12)
             }
@@ -118,6 +121,80 @@ struct ReviewView: View {
             case .needsReview: return row.selectedChoice == .skip && !row.topCandidates.isEmpty
             case .confirmed:   return row.selectedChoice != .skip
             }
+        }
+    }
+}
+
+// MARK: - Exact matches collapsible section
+
+private struct ExactMatchesSectionView: View {
+    let indices: [Int]
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Button {
+                withAnimation(.spring(duration: 0.3)) { isExpanded.toggle() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.callout.bold())
+                        .contentTransition(.symbolEffect(.replace))
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                    Text("\(indices.count) exact match\(indices.count == 1 ? "" : "es")")
+                        .font(.callout.bold())
+                    Text("—")
+                        .foregroundStyle(.secondary)
+                    Text("auto-confirmed, no review needed")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("click to \(isExpanded ? "hide" : "show")")
+                        .font(.body)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+            }
+            .buttonStyle(.plain)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.green.opacity(0.3), lineWidth: 1)
+            }
+
+            if isExpanded {
+                ForEach(indices, id: \.self) { i in
+                    ReviewRowView(rowIndex: i)
+                        .reviewCardStyle()
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Glass card style
+
+extension View {
+    @ViewBuilder
+    func reviewCardStyle() -> some View {
+        if #available(macOS 26, *) {
+            self
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .glassEffect(in: RoundedRectangle(cornerRadius: 6))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+                }
+        } else {
+            self
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                }
         }
     }
 }

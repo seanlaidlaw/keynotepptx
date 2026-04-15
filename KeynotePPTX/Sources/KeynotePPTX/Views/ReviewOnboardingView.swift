@@ -23,12 +23,12 @@ struct ReviewOnboardingView: View {
                             .fill(Color.accentColor.opacity(0.08))
                             .frame(width: 100, height: 70)
                         Image(systemName: "photo")
-                            .font(.system(size: 28))
+                            .font(.title)
                             .foregroundStyle(Color.accentColor.opacity(0.5))
                             .blur(radius: 1.5)
                     }
                     Text("Low quality\n(from PPTX)")
-                        .font(.caption2)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -51,11 +51,11 @@ struct ReviewOnboardingView: View {
                                             .stroke(i == 0 ? Color.accentColor : Color.clear, lineWidth: 2)
                                     }
                                 Image(systemName: "photo.fill")
-                                    .font(.system(size: i == 0 ? 22 : 18))
+                                    .font(i == 0 ? .title2 : .title3)
                                     .foregroundStyle(i == 0 ? Color.accentColor : Color.secondary.opacity(0.4))
                             }
                             Text(i == 0 ? "Best match" : "Alt \(i)")
-                                .font(.caption2)
+                                .font(.callout)
                                 .foregroundStyle(i == 0 ? Color.accentColor : .secondary)
                         }
                     }

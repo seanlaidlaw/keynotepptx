@@ -9,10 +9,10 @@ struct CandidateCardView: View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: 6) {
                 ThumbnailView(data: candidate.thumbnailData)
-                    .frame(width: 160, height: 120)
+                    .frame(width: 160, height: 110)
 
                 Text(candidate.keynoteFilename)
-                    .font(.caption.monospaced())
+                    .font(.callout.monospaced())
                     .lineLimit(2)
                     .truncationMode(.middle)
 
@@ -23,7 +23,7 @@ struct CandidateCardView: View {
                 }
 
                 Text(candidate.fileSizeBytes.formatted(.byteCount(style: .file)))
-                    .font(.caption)
+                    .font(.body)
                     .foregroundStyle(.tertiary)
             }
         }
