@@ -65,7 +65,7 @@ struct ReviewView: View {
                             .reviewCardStyle()
                     }
 
-                    if !exactMatchIndices.isEmpty {
+                    if !exactMatchIndices.isEmpty && filter != .needsReview {
                         ExactMatchesSectionView(
                             indices: exactMatchIndices,
                             isExpanded: $showExactMatches
@@ -105,11 +105,10 @@ struct ReviewView: View {
     }
 
     private func updateFilteredIndices() {
-        // Rows with a single candidate at delta 0 are unambiguous perfect matches —
-        // partition them into their own collapsed section so they don't clutter review.
+        // A row is an "exact match" when its best candidate has Δ0 — perfect hash match.
+        // We don't require count == 1; there may be other non-zero candidates alongside.
         exactMatchIndices = appState.mappingRows.indices.filter { i in
-            let row = appState.mappingRows[i]
-            return row.topCandidates.count == 1 && row.topCandidates[0].aHashDistance == 0
+            appState.mappingRows[i].topCandidates.first?.aHashDistance == 0
         }
         let exactSet = Set(exactMatchIndices)
 
