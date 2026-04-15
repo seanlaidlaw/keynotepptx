@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import CoreGraphics
 import WebP
+import pngquant
 
 /// Renders any source image file (SVG, PDF, raster) to a CGImage.
 /// Returns CGImage (Sendable) so it can safely cross actor boundaries.
@@ -84,40 +85,51 @@ enum ImageRenderer {
         return compositeOnBackground(nsImage: img, width: targetW, height: targetH)
     }
 
-    // MARK: - SVG (native macOS 12+ _NSSVGImageRep)
+    // MARK: - SVG → in-memory PDF → CGImage
+
+    /// Renders an SVG into an in-memory CGPDFDocument by drawing it through AppKit's
+    /// SVG renderer (_NSSVGImageRep) into a PDF CGContext.
+    ///
+    /// This replicates Keynote's internal SVG→PDF companion pipeline: Keynote stores a
+    /// PDF alongside each imported SVG (consecutive asset IDs) and renders *that* PDF
+    /// when exporting to PPTX — not the SVG directly. By going through the same
+    /// SVG→PDF→raster path we produce hashes that match the PPTX PNGs exactly.
+    ///
+    /// PDF contexts are naturally bottom-up (non-flipped), which is what `_NSSVGImageRep`
+    /// expects when the graphics context is non-flipped — no coordinate mangling needed.
+    private static func svgToPDFDocument(url: URL) -> CGPDFDocument? {
+        guard let img = NSImage(contentsOf: url) else { return nil }
+        let size = img.size
+        guard size.width > 0, size.height > 0 else { return nil }
+
+        let pdfData = NSMutableData()
+        guard let consumer = CGDataConsumer(data: pdfData as CFMutableData) else { return nil }
+        var mediaBox = CGRect(origin: .zero, size: size)
+        guard let ctx = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
+
+        ctx.beginPDFPage(nil)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        img.draw(in: NSRect(origin: .zero, size: size))
+        NSGraphicsContext.restoreGraphicsState()
+        ctx.endPDFPage()
+        ctx.closePDF()
+
+        guard let provider = CGDataProvider(data: pdfData as CFData) else { return nil }
+        return CGPDFDocument(provider)
+    }
 
     private static func renderSVG(url: URL, maxDim: Int) -> CGImage? {
-        guard let img = NSImage(contentsOf: url) else { return nil }
-        let srcSize = img.size
-        guard srcSize.width > 0, srcSize.height > 0 else { return nil }
-        let scale = CGFloat(maxDim) / max(srcSize.width, srcSize.height)
-        let targetW = max(1, Int(srcSize.width * scale))
-        let targetH = max(1, Int(srcSize.height * scale))
-
-        // Render into NSBitmapImageRep via its native NSGraphicsContext, which is
-        // natively flipped (y=0 at top). _NSSVGImageRep applies its own internal
-        // Y-flip to convert SVG's top-down coordinates to the screen convention —
-        // using NSGraphicsContext(bitmapImageRep:) gives it exactly that environment.
-        // Using NSGraphicsContext(cgContext:flipped:true) causes a double-flip (upside-down)
-        // because both AppKit and the rep apply the same flip independently.
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: targetW, pixelsHigh: targetH,
-            bitsPerSample: 8, samplesPerPixel: 4,
-            hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0, bitsPerPixel: 0
-        ) else { return nil }
-
-        // First render to transparent background to detect content colours.
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        img.draw(in: NSRect(x: 0, y: 0, width: targetW, height: targetH))
-        NSGraphicsContext.restoreGraphicsState()
-
-        guard let rawCG = rep.cgImage else { return nil }
-        let bg = backgroundForCompositing(rawCG)
-        return compositeOnBackground(cgImage: rawCG, background: bg, width: targetW, height: targetH)
+        guard let pdfDoc = svgToPDFDocument(url: url),
+              let page = pdfDoc.page(at: 1) else { return nil }
+        let pageRect = cgPDFVisibleRect(page)
+        guard pageRect.width > 0, pageRect.height > 0 else { return nil }
+        let scale = CGFloat(maxDim) / max(pageRect.width, pageRect.height)
+        let width = max(1, Int(pageRect.width * scale))
+        let height = max(1, Int(pageRect.height * scale))
+        let cs = CGColorSpaceCreateDeviceRGB()
+        return renderPDFPageOpaque(page: page, pageRect: pageRect, scale: scale,
+                                   width: width, height: height, cs: cs)
     }
 
     // MARK: - PDF shared rendering
@@ -254,12 +266,8 @@ enum ImageRenderer {
         guard let cgImage = renderWithTransparency(url: url, width: widthPx, ext: ext) else {
             throw RendererError.failed(url.lastPathComponent)
         }
-        let mutableData = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(mutableData, "public.png" as CFString, 1, nil)
-        else { throw RendererError.failed("CGImageDestination") }
-        CGImageDestinationAddImage(dest, cgImage, nil)
-        guard CGImageDestinationFinalize(dest) else { throw RendererError.failed("finalize") }
-        return mutableData as Data
+        let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        return try nsImage.pngQuantData()
     }
 
     /// Render source to WebP data (quality 95) at widthPx using Swift-WebP.
@@ -278,24 +286,27 @@ enum ImageRenderer {
     private static func renderWithTransparency(url: URL, width: Int, ext: String) -> CGImage? {
         switch ext {
         case "svg":
-            guard let img = NSImage(contentsOf: url) else { return nil }
-            let srcSize = img.size
-            guard srcSize.width > 0 else { return nil }
-            let scale = CGFloat(width) / srcSize.width
-            let h = max(1, Int(srcSize.height * scale))
-            guard let rep = NSBitmapImageRep(
-                bitmapDataPlanes: nil,
-                pixelsWide: width, pixelsHigh: h,
-                bitsPerSample: 8, samplesPerPixel: 4,
-                hasAlpha: true, isPlanar: false,
-                colorSpaceName: .deviceRGB,
-                bytesPerRow: 0, bitsPerPixel: 0
+            // Route through the same SVG→PDF→raster pipeline used for hashing so that
+            // the exported PNG is rendered identically to Keynote's PPTX export.
+            guard let pdfDoc = svgToPDFDocument(url: url),
+                  let page = pdfDoc.page(at: 1) else { return nil }
+            let pageRect = cgPDFVisibleRect(page)
+            guard pageRect.width > 0, pageRect.height > 0 else { return nil }
+            let scale = CGFloat(width) / pageRect.width
+            let h = max(1, Int(pageRect.height * scale))
+            let cs = CGColorSpaceCreateDeviceRGB()
+            guard let ctx = CGContext(
+                data: nil, width: width, height: h,
+                bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             ) else { return nil }
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-            img.draw(in: NSRect(x: 0, y: 0, width: width, height: h))
-            NSGraphicsContext.restoreGraphicsState()
-            return rep.cgImage
+            ctx.interpolationQuality = .high
+            ctx.saveGState()
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.translateBy(x: -pageRect.origin.x, y: -pageRect.origin.y)
+            ctx.drawPDFPage(page)
+            ctx.restoreGState()
+            return ctx.makeImage()
 
         case "pdf":
             guard let pdfDoc = CGPDFDocument(url as CFURL),
