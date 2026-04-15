@@ -12,11 +12,10 @@ struct ReviewRowView: View {
             // Left panel: PPTX source image (fixed width, visually distinct)
             VStack(alignment: .leading, spacing: 0) {
                 // Header strip
-                Label("PowerPoint", systemImage: "doc.richtext.fill")
+                Label("Low quality image", systemImage: "photo")
                     .font(.caption2.bold())
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                    .padding(EdgeInsets(top: 9, leading: 10, bottom: 6, trailing: 10))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.accentColor)
 

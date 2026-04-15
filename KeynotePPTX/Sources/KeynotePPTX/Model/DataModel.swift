@@ -157,11 +157,11 @@ enum PatchMode: String, CaseIterable, Sendable {
     var detail: String {
         switch self {
         case .vectorInPlace:
-            return "Use selected SVG/PDF files directly. Best for PowerPoint on Mac/Windows that support embedded SVG."
+            return "Embeds SVG/PDF files directly. Best for newer versions of PowerPoint — preserves full original vector quality at any zoom level."
         case .embedPNG:
-            return "Convert selected SVG/PDF replacements to PNG at 2560 px wide. Maximum compatibility."
+            return "Converts SVG/PDF replacements to PNG at 2560 px wide. Best for Google Slides and maximum compatibility with all applications."
         case .embedWebP75:
-            return "Convert to PNG then compress to WebP at quality 75. Smaller file, but slower to open."
+            return "Converts SVG/PDF replacements to WebP at quality 75. Best for smallest output file size."
         }
     }
 }
