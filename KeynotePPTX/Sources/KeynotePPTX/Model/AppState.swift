@@ -93,6 +93,9 @@ final class AppState {
 
         let rows = self.mappingRows
         let mode = self.patchMode
+        // Save debug mapping now — selectedChoice reflects the user's confirmed ground truth,
+        // not the algorithm's initial auto-selection, which is what we want for training data.
+        ProcessingPipeline.saveDebugMapping(rows: rows, to: pptxExtractDir.deletingLastPathComponent())
 
         let progressCallback: @Sendable (Double, String) -> Void = { p, detail in
             Task { @MainActor [weak self] in
@@ -257,5 +260,52 @@ enum ProcessingPipeline {
             pptxSlideCount: pptxSlideCount,
             keynoteSlideCount: keynoteSlideCount
         )
+    }
+
+    // MARK: - Debug output
+
+    /// Saves a JSON file to the session directory listing every PPTX image, its matched
+    /// Keynote file, and all hash distances / composite scores — useful for debugging match quality.
+    static func saveDebugMapping(rows: [MappingRow], to sessionDir: URL) {
+        var entries: [[String: Any]] = []
+        for row in rows {
+            // Determine the user-confirmed keynote filename (nil = skipped)
+            let confirmedFilename: String?
+            switch row.selectedChoice {
+            case .skip:                    confirmedFilename = nil
+            case .keynoteFile(let name):   confirmedFilename = name
+            case .customFile(let url):     confirmedFilename = url.lastPathComponent
+            }
+
+            var candidateEntries: [[String: Any]] = []
+            for c in row.topCandidates {
+                // Combined score mirrors MatchEngine sort: aHash + cmDist * 5.0
+                let combinedScore = Float(c.aHashDistance) + c.colorMomentDistance * 5.0
+                candidateEntries.append([
+                    "keynote_filename": c.keynoteFilename,
+                    "ahash_distance": c.aHashDistance,
+                    "phash_distance": c.pHashDistance,
+                    "cm_distance": Double(c.colorMomentDistance),
+                    "combined_score": Double(combinedScore),
+                    // True on exactly one candidate — the user's confirmed ground-truth label
+                    "user_confirmed": c.keynoteFilename == confirmedFilename
+                ])
+            }
+
+            entries.append([
+                "pptx_filename": row.pptxItem.filename,
+                "pptx_slides": row.pptxItem.slideNumbers,
+                "quality": row.quality.rawValue,
+                "is_xml_exact": row.isXmlExact,
+                // Top-level convenience field: the confirmed keynote file, or "skip"
+                "confirmed_match": confirmedFilename ?? "skip",
+                "candidates": candidateEntries
+            ])
+        }
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: entries,
+            options: [.prettyPrinted, .sortedKeys]
+        ) else { return }
+        try? data.write(to: sessionDir.appendingPathComponent("matching_debug.json"))
     }
 }

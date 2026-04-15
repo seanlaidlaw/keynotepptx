@@ -11,6 +11,8 @@ struct ReviewView: View {
     @State private var filter: ReviewFilter = .all
     @State private var showPatchOptions = false
     @State private var filteredIndices: [Int] = []
+    @State private var exactMatchIndices: [Int] = []
+    @State private var showExactMatches = false
     @AppStorage("hasSeenReviewOnboarding") private var hasSeenOnboarding = false
     @State private var showOnboarding = false
     @State private var showSlideCountAlert = false
@@ -100,7 +102,16 @@ struct ReviewView: View {
     }
 
     private func updateFilteredIndices() {
+        // Rows with a single candidate at delta 0 are unambiguous perfect matches —
+        // partition them into their own collapsed section so they don't clutter review.
+        exactMatchIndices = appState.mappingRows.indices.filter { i in
+            let row = appState.mappingRows[i]
+            return row.topCandidates.count == 1 && row.topCandidates[0].aHashDistance == 0
+        }
+        let exactSet = Set(exactMatchIndices)
+
         filteredIndices = appState.mappingRows.indices.filter { i in
+            guard !exactSet.contains(i) else { return false }
             let row = appState.mappingRows[i]
             switch filter {
             case .all:         return true
