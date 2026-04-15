@@ -210,17 +210,23 @@ enum ProcessingPipeline {
         var keynoteFingerprints: [String: ImageFingerprint] = [:]
         let keynoteTotal = max(keynoteItems.count, 1)
         var keynoteDone = 0
+        // Leave one core free for the main thread (UI events, progress updates).
+        let maxConcurrency = max(1, ProcessInfo.processInfo.processorCount - 1)
         await withTaskGroup(of: (String, ImageFingerprint).self) { group in
-            for item in keynoteItems {
-                group.addTask {
-                    (item.filename, ImageFingerprinter.fingerprint(url: item.absolutePath))
-                }
+            var nextIndex = 0
+            while nextIndex < min(maxConcurrency, keynoteItems.count) {
+                let item = keynoteItems[nextIndex]; nextIndex += 1
+                group.addTask { (item.filename, ImageFingerprinter.fingerprint(url: item.absolutePath)) }
             }
             for await (name, fp) in group {
                 keynoteFingerprints[name] = fp
                 keynoteDone += 1
                 progress(0.20 + 0.32 * Double(keynoteDone) / Double(keynoteTotal),
                          "Keynote assets \(keynoteDone)/\(keynoteTotal)…")
+                if nextIndex < keynoteItems.count {
+                    let item = keynoteItems[nextIndex]; nextIndex += 1
+                    group.addTask { (item.filename, ImageFingerprinter.fingerprint(url: item.absolutePath)) }
+                }
             }
         }
 
@@ -247,16 +253,20 @@ enum ProcessingPipeline {
         let pptxTotal = max(pptxItems.count, 1)
         var pptxDone = 0
         await withTaskGroup(of: (String, ImageFingerprint).self) { group in
-            for item in pptxItems {
-                group.addTask {
-                    (item.filename, ImageFingerprinter.fingerprint(url: item.absolutePath))
-                }
+            var nextIndex = 0
+            while nextIndex < min(maxConcurrency, pptxItems.count) {
+                let item = pptxItems[nextIndex]; nextIndex += 1
+                group.addTask { (item.filename, ImageFingerprinter.fingerprint(url: item.absolutePath)) }
             }
             for await (name, fp) in group {
                 pptxFingerprints[name] = fp
                 pptxDone += 1
                 progress(0.55 + 0.25 * Double(pptxDone) / Double(pptxTotal),
                          "PPTX images \(pptxDone)/\(pptxTotal)…")
+                if nextIndex < pptxItems.count {
+                    let item = pptxItems[nextIndex]; nextIndex += 1
+                    group.addTask { (item.filename, ImageFingerprinter.fingerprint(url: item.absolutePath)) }
+                }
             }
         }
 

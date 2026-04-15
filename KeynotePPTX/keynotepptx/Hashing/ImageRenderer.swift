@@ -75,13 +75,18 @@ enum ImageRenderer {
     // MARK: - Raster
 
     private static func renderRaster(url: URL, maxDim: Int) -> CGImage? {
-        guard let img = NSImage(contentsOf: url) else { return nil }
-        let srcSize = img.size
-        guard srcSize.width > 0, srcSize.height > 0 else { return nil }
-        let scale = min(CGFloat(maxDim) / max(srcSize.width, srcSize.height), 1.0)
-        let targetW = max(1, Int(srcSize.width * scale))
-        let targetH = max(1, Int(srcSize.height * scale))
-        return compositeOnBackground(nsImage: img, width: targetW, height: targetH)
+        // CGImageSource is fully thread-safe and never touches AppKit — critical because
+        // this runs inside the parallel fingerprinting task group.
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let rawImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        let sw = rawImage.width, sh = rawImage.height
+        guard sw > 0, sh > 0 else { return nil }
+        let scale = min(Double(maxDim) / Double(max(sw, sh)), 1.0)
+        let targetW = max(1, Int(Double(sw) * scale))
+        let targetH = max(1, Int(Double(sh) * scale))
+        return compositeOnBackground(cgImage: rawImage,
+                                     background: backgroundForCompositing(rawImage),
+                                     width: targetW, height: targetH)
     }
 
     // MARK: - SVG → in-memory PDF → CGImage
@@ -238,32 +243,6 @@ enum ImageRenderer {
 
     // MARK: - Background compositing
 
-    /// Composites `nsImage` onto the appropriate background colour (white normally,
-    /// black when all opaque content is white — see `backgroundForCompositing`).
-    private static func compositeOnBackground(nsImage: NSImage, width: Int, height: Int) -> CGImage? {
-        // Get the raw CGImage to inspect colours before compositing.
-        let bg: CGColor
-        if let raw = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            bg = backgroundForCompositing(raw)
-        } else {
-            bg = CGColor(red: 1, green: 1, blue: 1, alpha: 1)
-        }
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let ctx = CGContext(
-            data: nil, width: width, height: height,
-            bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-        ctx.setFillColor(bg)
-        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: false)
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = nsCtx
-        nsImage.draw(in: CGRect(x: 0, y: 0, width: width, height: height))
-        NSGraphicsContext.restoreGraphicsState()
-        return ctx.makeImage()
-    }
-
     /// Composites a raw `CGImage` (already rendered, possibly with alpha) onto `background`.
     private static func compositeOnBackground(cgImage: CGImage, background: CGColor, width: Int, height: Int) -> CGImage? {
         let colorSpace = CGColorSpaceCreateDeviceRGB()
@@ -306,17 +285,73 @@ enum ImageRenderer {
     /// Render source to WebP data (quality 75) at widthPx using Swift-WebP.
     static func renderToWebPData(url: URL, widthPx: Int = 2560) throws -> Data {
         let ext = url.pathExtension.lowercased()
-        guard let cgImage = renderWithTransparency(url: url, width: widthPx, ext: ext) else {
+
+        // Vector sources (PDF / SVG) are rendered directly from the CGPDFPage into a
+        // caller-owned RGBX buffer using CGContext(data: buffer).
+        //
+        // The alternative — CGContext(data:nil) → makeImage() → ctx.draw(cgImage) — is
+        // what caused the spinning beach ball: on Apple Silicon, CGContext(data:nil)
+        // allocates an IOSurface (Metal-backed) for the bitmap. Drawing that
+        // IOSurface-backed CGImage into a CPU-owned buffer triggers a GPU→CPU readback
+        // that CoreGraphics dispatches to the main queue. With several concurrent WebP
+        // tasks each doing this, the main thread is flooded and freezes.
+        //
+        // CGContext(data:callerBuffer) forces CPU-only software rendering — identical
+        // visual output, fully thread-safe, no IOSurface, no main-queue dispatch.
+        if ext == "pdf" || ext == "svg" {
+            let pdfDoc: CGPDFDocument?
+            if ext == "svg" {
+                pdfDoc = svgToPDFDocument(url: url)
+            } else {
+                pdfDoc = CGPDFDocument(url as CFURL)
+            }
+            guard let pdfDoc, let page = pdfDoc.page(at: 1) else {
+                throw RendererError.failed(url.lastPathComponent)
+            }
+            let pageRect = cgPDFVisibleRect(page)
+            guard pageRect.width > 0, pageRect.height > 0 else {
+                throw RendererError.failed(url.lastPathComponent)
+            }
+            let scale = CGFloat(widthPx) / pageRect.width
+            let w = widthPx, h = max(1, Int(pageRect.height * scale)), stride = w * 4
+            var pixels = [UInt8](repeating: 255, count: h * stride) // white background
+            try pixels.withUnsafeMutableBytes { buf in
+                let cs = CGColorSpaceCreateDeviceRGB()
+                guard let ctx = CGContext(
+                    data: buf.baseAddress, width: w, height: h,
+                    bitsPerComponent: 8, bytesPerRow: stride, space: cs,
+                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+                ) else { throw RendererError.failed(url.lastPathComponent) }
+                ctx.interpolationQuality = .high
+                ctx.saveGState()
+                ctx.scaleBy(x: scale, y: scale)
+                ctx.translateBy(x: -pageRect.origin.x, y: -pageRect.origin.y)
+                ctx.drawPDFPage(page)
+                ctx.restoreGState()
+            }
+            return try pixels.withUnsafeBytes { buf in
+                try WebPEncoder().encode(
+                    buf.bindMemory(to: UInt8.self),
+                    format: .rgbx,
+                    config: .preset(.picture, quality: 75),
+                    originWidth: w, originHeight: h, stride: stride
+                )
+            }
+        }
+
+        // Raster: use CGImageSource directly so rawImage is CPU-backed from the start.
+        // Calling renderWithTransparency would pass rawImage through CGContext(data:nil),
+        // producing an IOSurface-backed intermediate — drawing that into a CPU buffer
+        // triggers the same GPU→CPU readback / main-queue dispatch we're trying to avoid.
+        // CGImageSource → CGContext(data:callerBuffer) stays entirely on CPU.
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let rawImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
             throw RendererError.failed(url.lastPathComponent)
         }
-        // CGImages produced by CGContext(data: nil, ...) have an opaque internal backing
-        // buffer — CGDataProvider.data returns nil for them, so WebPEncoder's CGImage
-        // convenience method (which calls cgImage.getBaseAddress() → dataProvider.data)
-        // throws unexpectedPointerError. Re-render into a caller-owned RGBX buffer
-        // so WebPEncoder can read the bytes directly, bypassing CGDataProvider entirely.
-        // RGBX (noneSkipLast) avoids premultiplied-alpha colour shifts and gives WebP a
-        // plain 3-channel image — the X byte is ignored by the encoder.
-        let w = cgImage.width, h = cgImage.height, stride = w * 4
+        let srcW = rawImage.width, srcH = rawImage.height
+        guard srcW > 0, srcH > 0 else { throw RendererError.failed(url.lastPathComponent) }
+        let scale = Double(widthPx) / Double(srcW)
+        let w = widthPx, h = max(1, Int(Double(srcH) * scale)), stride = w * 4
         var pixels = [UInt8](repeating: 255, count: h * stride) // white background
         try pixels.withUnsafeMutableBytes { buf in
             let cs = CGColorSpaceCreateDeviceRGB()
@@ -325,7 +360,8 @@ enum ImageRenderer {
                 bitsPerComponent: 8, bytesPerRow: stride, space: cs,
                 bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
             ) else { throw RendererError.failed(url.lastPathComponent) }
-            ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
+            ctx.interpolationQuality = .high
+            ctx.draw(rawImage, in: CGRect(x: 0, y: 0, width: w, height: h))
         }
         return try pixels.withUnsafeBytes { buf in
             try WebPEncoder().encode(
@@ -384,22 +420,21 @@ enum ImageRenderer {
             return ctx.makeImage()
 
         default:
-            guard let img = NSImage(contentsOf: url) else { return nil }
-            let srcSize = img.size
-            guard srcSize.width > 0 else { return nil }
-            let scale = CGFloat(width) / srcSize.width
-            let h = max(1, Int(srcSize.height * scale))
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            // CGImageSource is thread-safe and AppKit-free — safe for parallel export tasks.
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let rawImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+            let srcW = rawImage.width, srcH = rawImage.height
+            guard srcW > 0 else { return nil }
+            let scale = Double(width) / Double(srcW)
+            let h = max(1, Int(Double(srcH) * scale))
+            let cs = CGColorSpaceCreateDeviceRGB()
             guard let ctx = CGContext(
                 data: nil, width: width, height: h,
-                bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
+                bitsPerComponent: 8, bytesPerRow: 0, space: cs,
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             ) else { return nil }
-            let nsCtx = NSGraphicsContext(cgContext: ctx, flipped: false)
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = nsCtx
-            img.draw(in: CGRect(x: 0, y: 0, width: width, height: h))
-            NSGraphicsContext.restoreGraphicsState()
+            ctx.interpolationQuality = .high
+            ctx.draw(rawImage, in: CGRect(x: 0, y: 0, width: width, height: h))
             return ctx.makeImage()
         }
     }

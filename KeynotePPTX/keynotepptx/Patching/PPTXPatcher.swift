@@ -139,14 +139,36 @@ enum PPTXPatcher {
 
         let total = max(replacements.count, 1)
 
-        // Leave one core free for the main thread (UI events, XML serialisation).
-        let maxConcurrency = max(1, ProcessInfo.processInfo.processorCount - 1)
+        // WebP encoding (libwebp) is CPU-intensive and synchronous: each task occupies its
+        // thread for 0.5–2 s. Running processorCount–1 of them simultaneously saturates the
+        // CPU and starves the main thread even though it nominally has "one core free".
+        //
+        // Two-pronged fix:
+        //  • Fewer concurrent tasks for WebP (processorCount / 2) vs fast modes (processorCount – 1).
+        //  • .utility task priority: the OS always prefers the main thread (userInteractive)
+        //    over utility work, so it can preempt encoding tasks whenever UI events arrive.
+        //
+        // PNG via ImageIO completes in ~50 ms/image, so higher concurrency + default priority
+        // is fine — the threads cycle quickly and the main thread is never starved.
+        let maxConcurrency: Int
+        let taskPriority: TaskPriority?
+        switch patchMode {
+        case .embedWebP75:
+            maxConcurrency = max(1, ProcessInfo.processInfo.processorCount / 2)
+            taskPriority   = .utility
+        default:
+            maxConcurrency = max(1, ProcessInfo.processInfo.processorCount - 1)
+            taskPriority   = nil   // inherit from parent (userInitiated)
+        }
+
         try await withThrowingTaskGroup(of: Void.self) { group in
             var nextIndex = 0
             // Seed initial batch up to the concurrency limit.
             while nextIndex < min(maxConcurrency, replacements.count) {
                 let repl = replacements[nextIndex]; nextIndex += 1
-                group.addTask { try await materialise(repl, into: mediaDir, patchMode: patchMode) }
+                group.addTask(priority: taskPriority) {
+                    try await materialise(repl, into: mediaDir, patchMode: patchMode)
+                }
             }
             var completed = 0
             for try await _ in group {
@@ -155,7 +177,9 @@ enum PPTXPatcher {
                          "Converting \(completed)/\(total)…")
                 if nextIndex < replacements.count {
                     let repl = replacements[nextIndex]; nextIndex += 1
-                    group.addTask { try await materialise(repl, into: mediaDir, patchMode: patchMode) }
+                    group.addTask(priority: taskPriority) {
+                        try await materialise(repl, into: mediaDir, patchMode: patchMode)
+                    }
                 }
             }
         }
