@@ -74,9 +74,19 @@ final class PDFConversionTests: XCTestCase {
 
     // MARK: - Main test
 
+    // Output directory in ~/Library/Caches for easy visual inspection in Finder/Preview.
+    private static let outputDir: URL = {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = caches
+            .appendingPathComponent("keynotepptxTests", isDirectory: true)
+            .appendingPathComponent("PDFConversion", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
     func testPDFConversionMatchesKeynoteExport() throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PDFConversionTests-\(UUID().uuidString)", isDirectory: true)
+        let tempDir = Self.outputDir.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         print("PDFConversionTests output: \(tempDir.path)")
 

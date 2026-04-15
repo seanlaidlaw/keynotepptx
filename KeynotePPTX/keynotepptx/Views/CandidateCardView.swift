@@ -19,7 +19,7 @@ struct CandidateCardView: View {
                 HStack(spacing: 4) {
                     KindBadge(kind: candidate.replacementKind, ext: candidate.fileExtension)
                     Spacer()
-                    HashDistanceLabel(distance: candidate.aHashDistance)
+                    HashDistanceLabel(distance: candidate.pHashDistance)
                 }
 
                 Text(candidate.fileSizeBytes.formatted(.byteCount(style: .file)))

@@ -205,7 +205,7 @@ enum ProcessingPipeline {
             }
         }
 
-        // 5. Fingerprint keynote assets (0.20 → 0.55)
+        // 5. Fingerprint keynote assets (0.20 → 0.52)
         progress(0.20, "Fingerprinting Keynote assets…")
         var keynoteFingerprints: [String: ImageFingerprint] = [:]
         let keynoteTotal = max(keynoteItems.count, 1)
@@ -219,10 +219,27 @@ enum ProcessingPipeline {
             for await (name, fp) in group {
                 keynoteFingerprints[name] = fp
                 keynoteDone += 1
-                progress(0.20 + 0.35 * Double(keynoteDone) / Double(keynoteTotal),
+                progress(0.20 + 0.32 * Double(keynoteDone) / Double(keynoteTotal),
                          "Keynote assets \(keynoteDone)/\(keynoteTotal)…")
             }
         }
+
+        // 5.5 Resolve SVG/PDF companion pairs (0.52 → 0.55)
+        // Each SVG imported into Keynote has a companion PDF alongside it (consecutive
+        // asset IDs, delta ≤ 2).  The companion PDF is what Keynote rasterises when
+        // exporting to PPTX, so its fingerprint is pixel-accurate vs the PPTX PNGs —
+        // the SVG's fingerprint can diverge due to missing fonts or overflow differences.
+        //
+        // For each confirmed pair we:
+        //   • Replace the SVG's fingerprint with the PDF's hash/dimension metrics
+        //     (keeping the SVG's filename and file size so the SVG remains the candidate)
+        //   • Remove the companion PDF from keynoteItems and keynoteFingerprints entirely
+        //     so it never appears as a separate candidate in the review UI.
+        progress(0.52, "Resolving SVG/PDF companion pairs…")
+        let resolvedKeynoteItems = resolveCompanionPairs(
+            keynoteItems: keynoteItems,
+            fingerprints: &keynoteFingerprints
+        )
 
         // 6. Fingerprint PPTX images (0.55 → 0.80)
         progress(0.55, "Fingerprinting PPTX images…")
@@ -247,7 +264,7 @@ enum ProcessingPipeline {
         progress(0.80, "Matching images…")
         let rows = MatchEngine.buildMappingRows(
             pptxItems: pptxItems,
-            keynoteItems: keynoteItems,
+            keynoteItems: resolvedKeynoteItems,
             pptxFingerprints: pptxFingerprints,
             keynoteFingerprints: keynoteFingerprints,
             slideMedia: slideMedia,
@@ -262,6 +279,102 @@ enum ProcessingPipeline {
             pptxSlideCount: pptxSlideCount,
             keynoteSlideCount: keynoteSlideCount
         )
+    }
+
+    // MARK: - SVG/PDF companion pair resolution
+
+    /// For every SVG in `keynoteItems` that has a confirmed companion PDF (same filename
+    /// stem, asset ID delta ≤ 2, validated by `SVGPDFPairValidator`):
+    ///
+    /// - Replaces the SVG's entry in `fingerprints` with a merged fingerprint that keeps
+    ///   the SVG's filename and file size but adopts the PDF's hash metrics (aHash, pHash,
+    ///   colorMoments, width, height).  The PDF renders with baked-in fonts so its hashes
+    ///   match the PPTX PNGs far more accurately than the SVG renderer can.
+    ///
+    /// - Removes the companion PDF from `fingerprints` and returns a filtered item list
+    ///   that excludes it.  The PDF is invisible to MatchEngine — it has done its job.
+    ///
+    /// Returns the filtered `[KeynoteMediaItem]` with absorbed PDFs removed.
+    static func resolveCompanionPairs(
+        keynoteItems: [KeynoteMediaItem],
+        fingerprints: inout [String: ImageFingerprint]
+    ) -> [KeynoteMediaItem] {
+
+        // Index all PDF items by (stem-without-trailing-ID → [(numericID, item)])
+        var pdfByStem: [String: [(id: Int, item: KeynoteMediaItem)]] = [:]
+        for item in keynoteItems {
+            let ext = URL(fileURLWithPath: item.filename).pathExtension.lowercased()
+            guard ext == "pdf" else { continue }
+            let stem = URL(fileURLWithPath: item.filename).deletingPathExtension().lastPathComponent
+            guard let id = trailingNumericID(of: stem) else { continue }
+            let baseStem = dropTrailingID(stem)
+            pdfByStem[baseStem, default: []].append((id, item))
+        }
+
+        var absorbedPDFs: Set<String> = []
+
+        for item in keynoteItems {
+            let ext = URL(fileURLWithPath: item.filename).pathExtension.lowercased()
+            guard ext == "svg" else { continue }
+
+            let svgStem = URL(fileURLWithPath: item.filename).deletingPathExtension().lastPathComponent
+            guard let svgID = trailingNumericID(of: svgStem) else { continue }
+            let baseStem = dropTrailingID(svgStem)
+
+            guard let pdfCandidates = pdfByStem[baseStem], !pdfCandidates.isEmpty else { continue }
+
+            // Among PDFs with the same stem, prefer the closest ID that is below the SVG's.
+            // (Keynote creates the PDF first, then the SVG — so PDF ID < SVG ID.)
+            let sorted = pdfCandidates
+                .filter { $0.id < svgID && svgID - $0.id <= 3 }
+                .sorted { abs($0.id - svgID) < abs($1.id - svgID) }
+
+            for (_, pdfItem) in sorted {
+                let result = SVGPDFPairValidator.validate(
+                    svg: item.absolutePath,
+                    pdf: pdfItem.absolutePath
+                )
+                guard result.isCompanionPair else { continue }
+
+                // Borrow the PDF's hash metrics for this SVG.
+                // The SVG is the replacement file (better PowerPoint support);
+                // the PDF's hashes are pixel-accurate against the PPTX PNGs.
+                if let svgFP = fingerprints[item.filename],
+                   let pdfFP = fingerprints[pdfItem.filename] {
+                    fingerprints[item.filename] = ImageFingerprint(
+                        filename:      svgFP.filename,       // keep SVG name
+                        fileSizeBytes: svgFP.fileSizeBytes,  // keep SVG file size
+                        aHash:         pdfFP.aHash,
+                        pHash:         pdfFP.pHash,
+                        colorMoments:  pdfFP.colorMoments,
+                        width:         pdfFP.width,
+                        height:        pdfFP.height,
+                        thumbnailData: pdfFP.thumbnailData,  // PDF thumbnail renders correctly
+                        error:         svgFP.error
+                    )
+                }
+                absorbedPDFs.insert(pdfItem.filename)
+                break  // one companion PDF per SVG
+            }
+        }
+
+        // Remove absorbed PDFs from fingerprints and return filtered item list
+        for name in absorbedPDFs { fingerprints.removeValue(forKey: name) }
+        return keynoteItems.filter { !absorbedPDFs.contains($0.filename) }
+    }
+
+    /// Extracts the trailing numeric ID from a filename stem, e.g. "Foo-1207" → 1207.
+    private static func trailingNumericID(of stem: String) -> Int? {
+        guard let dash = stem.lastIndex(of: "-") else { return nil }
+        let idStr = stem[stem.index(after: dash)...]
+        return Int(idStr)
+    }
+
+    /// Removes the trailing "-NNNN" from a stem, e.g. "Foo-1207" → "Foo".
+    private static func dropTrailingID(_ stem: String) -> String {
+        guard let dash = stem.lastIndex(of: "-"),
+              stem[stem.index(after: dash)...].allSatisfy(\.isNumber) else { return stem }
+        return String(stem[..<dash])
     }
 
     // MARK: - Debug output

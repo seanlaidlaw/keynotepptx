@@ -4,18 +4,33 @@ import Foundation
 enum MatchEngine {
 
     private static let aHashThreshold = 25
-    private static let pHashThreshold = 7
     private static let aHashDedupThreshold = 2
-    // Auto-select the top candidate only if its visible delta (aHash distance) is below this.
-    // Mirrors the Python code's distance < 10.0 threshold, now applied to the hash delta shown in the UI.
-    private static let aHashAutoSelectThreshold = 10
+    // Auto-select the top candidate only when its pHash distance is below this threshold.
+    // pHash (64-bit DCT) is the primary ranking signal; aHash is a fast pre-filter gate only.
+    // Threshold 16 = end of the "review" quality band: auto-select anything review-or-better
+    // (pHash ≤ 15 means ≤23% of DCT bits differ). "Poor" matches (pHash ≥ 16) require the
+    // user to actively confirm. The ranking gap to the next candidate still provides safety
+    // even when the top score is in the review range.
+    private static let pHashAutoSelectThreshold = 16
     // Aspect-ratio pre-filter: skip candidates where aspect ratios differ by more than 10%.
     // Catches gross shape mismatches before any hashing.
     private static let aspectRatioMaxRatio: Double = 1.1
-    // Weight applied to colorMoment distance when building the combined sort score.
-    // Blending cmDist into the sort means a wrong-coloured image at aHashDist=0 no longer
-    // automatically beats the correct image at aHashDist=1-2.
-    private static let colorMomentSortWeight: Float = 5.0
+    // Sort score: pHashDist + cmDist × colorMomentSortWeight
+    //
+    // aHash is a fast pre-filter gate only (aHashThreshold above). It is NOT part
+    // of the sort score because a low aHash distance does not reliably indicate a
+    // good match — two very different images can hash close if their 8×8 averages
+    // align by coincidence (e.g. smoking vs non-smoking icon: aHash=6 for the wrong
+    // candidate, aHash=10 for the correct one).
+    //
+    // pHash encodes more structural detail (64-bit DCT) and is the primary ranking
+    // signal. colorMoments disambiguate candidates with similar pHash by catching
+    // colour inversions and palette swaps. W_cm=20 means a cm delta of 0.2 (a clear
+    // colour shift) contributes ~4 pHash-bit equivalents — enough to break ties
+    // without overriding a decisive pHash gap.
+    //
+    // Keep colorMomentSortWeight in sync with MatchingAlgorithmTests.combinedScore().
+    private static let colorMomentSortWeight: Float = 20.0
 
     // Extension priority for deduplication (lower = preferred)
     private static let extPriority: [String: Int] = [
@@ -125,13 +140,10 @@ enum MatchEngine {
                 ))
             }
 
-            // Sort by combined score: aHash distance penalised by colorMoment distance.
-            // Pure tiebreak on cmDist means a wrong-coloured image at aHashDist=0 always
-            // beats the correct image at aHashDist=1. The weight blends both signals so
-            // large colour differences can overcome small hash-distance gaps.
+            // Sort by pHash + cmDist×W_cm (see colorMomentSortWeight comment for rationale).
             scored.sort { lhs, rhs in
-                let lScore = Float(lhs.aHashDist) + lhs.cmDist * colorMomentSortWeight
-                let rScore = Float(rhs.aHashDist) + rhs.cmDist * colorMomentSortWeight
+                let lScore = Float(lhs.pHashDist) + lhs.cmDist * colorMomentSortWeight
+                let rScore = Float(rhs.pHashDist) + rhs.cmDist * colorMomentSortWeight
                 return lScore < rScore
             }
 
@@ -214,15 +226,14 @@ enum MatchEngine {
                 isXmlExact: isXmlExact
             )
 
-            // 7. Default choice: xml_exact pre-selects only when its hash distance is low
-            // enough to be trustworthy. High-distance xml "matches" (likely wrong due to
-            // rendering differences or false positives) fall back to hash-based selection
-            // so the user must review them rather than accepting a clearly wrong assignment.
-            let xmlDistOK = primaryScoredCandidate.map { $0.aHashDist < aHashAutoSelectThreshold } ?? false
+            // 7. Default choice: auto-select when pHash distance is below the threshold
+            // (meaning ≤10/64 DCT bits differ — reliably "same image"). High-pHash
+            // candidates require user review even if aHash looked close.
+            let xmlDistOK = primaryScoredCandidate.map { $0.pHashDist < pHashAutoSelectThreshold } ?? false
             let selectedChoice: RowChoice
             if let xmlName = xmlExactCandidate, xmlDistOK {
                 selectedChoice = .keynoteFile(filename: xmlName)
-            } else if let first = top3.first, first.aHashDist < aHashAutoSelectThreshold {
+            } else if let first = top3.first, first.pHashDist < pHashAutoSelectThreshold {
                 selectedChoice = .keynoteFile(filename: first.item.filename)
             } else {
                 selectedChoice = .skip
@@ -287,18 +298,18 @@ enum MatchEngine {
 
     private static func classifyQuality(top: ScoredCandidate?, isXmlExact: Bool) -> MatchQuality {
         guard let top else { return .noMatch }
-        // Only award the xml-exact quality boost when the hash distance is within the
-        // auto-select threshold — a high-delta xml "match" is likely wrong and should
-        // be classified by its actual hash distance like any other candidate.
-        if isXmlExact && top.aHashDist < aHashAutoSelectThreshold {
-            return top.aHashDist == 0 ? .exact : .xmlExact
+        // Only award the xml-exact quality boost when pHash is within the auto-select
+        // threshold — a high-pHash xml "match" is likely wrong and should be classified
+        // by its actual pHash distance like any other candidate.
+        if isXmlExact && top.pHashDist < pHashAutoSelectThreshold {
+            return top.pHashDist == 0 ? .exact : .xmlExact
         }
-        switch top.aHashDist {
-        case 0: return .exact
-        case 1...7: return .strong
+        switch top.pHashDist {
+        case 0:      return .exact
+        case 1...7:  return .strong
         case 8...15: return .review
         case 16...25: return .poor
-        default: return .noMatch
+        default:     return .noMatch
         }
     }
 

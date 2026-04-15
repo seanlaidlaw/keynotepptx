@@ -9,7 +9,8 @@ import AppKit
 // In every case the user manually confirmed the correct match.  The algorithm's
 // combined score formula ranked a wrong candidate lower (= better) than the correct one.
 //
-// Current combined score (from MatchEngine): aHashDist + cmDist × 5.0   (pHash excluded)
+// Current combined score (from MatchEngine): pHashDist + cmDist × 20.0
+// aHash is a fast pre-filter gate only — it is NOT part of the sort score.
 //
 // ── Category A — SVG vs companion PDF ─────────────────────────────────────────────
 // Keynote stores a PDF companion for each imported SVG.  The old SVG renderer produced
@@ -25,8 +26,7 @@ import AppKit
 //   image37.png  →  MouseMethylationWorkflow-1207.svg (distractor: …1205.pdf)
 //
 // ── Category B — Genuinely ambiguous ─────────────────────────────────────────────
-// These require algorithm improvements.  Adding pHash to the combined score fixes both:
-//   new score = aHashDist + pHashDist × W_phash + cmDist × W_cm
+// The tiered score (pHash + cm×W_cm, aHash = gate only) distinguishes both:
 //
 //   image47.png  →  pasted-image-2715.pdf  (distractor: pasted-image-2722.pdf)
 //     correct: ahash=5 phash=2  cm=0.015  ←  wrong: ahash=3 phash=4  cm=0.271
@@ -44,36 +44,20 @@ final class MatchingAlgorithmTests: XCTestCase {
         .appendingPathComponent("TestData", isDirectory: true)
 
     // MARK: - Score formula (mirrors MatchEngine exactly — update both together)
+    //
+    // score = pHashDist + cmDist × colorMomentSortWeight
+    // Keep colorMomentSortWeight in sync with MatchEngine.colorMomentSortWeight.
 
-    /// Combined sort score used by MatchEngine.
-    /// Keep in sync with MatchEngine's sort closure (aHash + cmDist × colorMomentSortWeight).
-    private static let colorMomentSortWeight: Float = 5.0
+    private static let colorMomentSortWeight: Float = 20.0
 
     private func combinedScore(ref: ImageFingerprint, cand: ImageFingerprint) -> Float {
-        guard let rA = ref.aHash, let cA = cand.aHash else { return .infinity }
-        let aHashDist = Float(ImageHasher.hammingDistance(rA, cA))
+        guard let rP = ref.pHash, let cP = cand.pHash else { return .infinity }
+        let pHashDist = Float(ImageHasher.hammingDistance(rP, cP))
         let cmDist: Float = {
             guard let rCM = ref.colorMoments, let cCM = cand.colorMoments else { return 0 }
             return ImageHasher.colorMomentDistance(rCM, cCM)
         }()
-        return aHashDist + cmDist * Self.colorMomentSortWeight
-    }
-
-    /// Extended score adding pHash — NOT yet used in production.
-    /// Included here to document what formula change fixes Category B failures.
-    private func extendedScore(ref: ImageFingerprint, cand: ImageFingerprint,
-                               pHashWeight: Float = 0.5) -> Float {
-        guard let rA = ref.aHash, let cA = cand.aHash else { return .infinity }
-        let aHashDist = Float(ImageHasher.hammingDistance(rA, cA))
-        let pHashDist: Float = {
-            guard let rP = ref.pHash, let cP = cand.pHash else { return 0 }
-            return Float(ImageHasher.hammingDistance(rP, cP))
-        }()
-        let cmDist: Float = {
-            guard let rCM = ref.colorMoments, let cCM = cand.colorMoments else { return 0 }
-            return ImageHasher.colorMomentDistance(rCM, cCM)
-        }()
-        return aHashDist + pHashDist * pHashWeight + cmDist * Self.colorMomentSortWeight
+        return pHashDist + cmDist * Self.colorMomentSortWeight
     }
 
     // MARK: - Helpers
@@ -104,7 +88,7 @@ final class MatchingAlgorithmTests: XCTestCase {
         }
 
         if failed {
-            var lines = ["Score table for \(refFile) (current formula: aHash + cm×5):"]
+            var lines = ["Score table for \(refFile) (formula: pHash + cm×\(Self.colorMomentSortWeight)):"]
             lines.append("  [✓] \(correctFile.padding(toLength: 60, withPad: " ", startingAt: 0)) score=\(String(format: "%.3f", correctScore))")
             for d in distractors {
                 let dScore = combinedScore(ref: refFP, cand: fp(d))
@@ -115,36 +99,6 @@ final class MatchingAlgorithmTests: XCTestCase {
         }
     }
 
-    /// Same as assertRanksFirst but uses the extended score (aHash + pHash×W + cm×5).
-    /// Documents the fix needed for Category B cases.
-    private func assertRanksFirstExtended(
-        reference refFile: String,
-        correct correctFile: String,
-        distractors: [String],
-        pHashWeight: Float = 0.5,
-        file: StaticString = #filePath, line: UInt = #line
-    ) {
-        let refFP        = fp(refFile)
-        let correctFP    = fp(correctFile)
-        let correctScore = extendedScore(ref: refFP, cand: correctFP, pHashWeight: pHashWeight)
-
-        var failed = false
-        for d in distractors {
-            let dScore = extendedScore(ref: refFP, cand: fp(d), pHashWeight: pHashWeight)
-            if dScore <= correctScore { failed = true }
-        }
-
-        if failed {
-            var lines = ["Score table for \(refFile) (extended formula: aHash + pHash×\(pHashWeight) + cm×5):"]
-            lines.append("  [✓] \(correctFile.padding(toLength: 60, withPad: " ", startingAt: 0)) score=\(String(format: "%.3f", correctScore))")
-            for d in distractors {
-                let dScore = extendedScore(ref: refFP, cand: fp(d), pHashWeight: pHashWeight)
-                let marker = dScore <= correctScore ? "✗" : " "
-                lines.append("  [\(marker)] \(d.padding(toLength: 60, withPad: " ", startingAt: 0)) score=\(String(format: "%.3f", dScore))")
-            }
-            XCTFail(lines.joined(separator: "\n"), file: file, line: line)
-        }
-    }
 
     // MARK: - Category A: SVG vs companion PDF
     //
@@ -153,6 +107,59 @@ final class MatchingAlgorithmTests: XCTestCase {
     // The dedup step (aHash delta ≤ 2 → keep higher extPriority) then selects
     // the SVG.  These tests verify the raw score is at least as good as the PDF's
     // (SVG score ≤ companion PDF score), so dedup can do its job.
+    //
+    // Each test also writes rendered PNGs to:
+    //   ~/Library/Caches/keynotepptxTests/MatchingAlgorithm/<label>/
+    //     1_ref_<name>.png      — the original PPTX reference PNG
+    //     2_svg_rendered.png    — SVG through our SVG→PDF→raster pipeline
+    //     3_pdf_rendered.png    — companion PDF through our PDF→raster pipeline
+    // Open these in Preview to visually diagnose any remaining differences.
+
+    private static let outputDir: URL = {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = caches
+            .appendingPathComponent("keynotepptxTests", isDirectory: true)
+            .appendingPathComponent("MatchingAlgorithm", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        print("MatchingAlgorithmTests output dir: \(dir.path)")
+        return dir
+    }()
+
+    /// Render `svgName` and `pdfName` to PNG at the native pixel width of `refName`,
+    /// then write all three alongside each other to `outputDir/<label>/`.
+    private func saveRenderComparison(label: String, ref refName: String,
+                                      svg svgName: String, pdf pdfName: String) {
+        let refURL = Self.testDataDir.appendingPathComponent(refName)
+        let svgURL = Self.testDataDir.appendingPathComponent(svgName)
+        let pdfURL = Self.testDataDir.appendingPathComponent(pdfName)
+
+        let dir = Self.outputDir.appendingPathComponent(label, isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // Determine native width of the reference PNG.
+        let refW: Int
+        if let refNS = NSImage(contentsOf: refURL),
+           let refCG = refNS.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            refW = refCG.width
+        } else {
+            refW = 1024
+        }
+
+        // 1. Copy the PPTX reference PNG as-is.
+        try? FileManager.default.copyItem(at: refURL,
+            to: dir.appendingPathComponent("1_ref_\(refName)"))
+
+        // 2. Render SVG via our SVG→PDF→raster pipeline.
+        if let svgData = try? ImageRenderer.renderToPNGData(url: svgURL, widthPx: refW) {
+            try? svgData.write(to: dir.appendingPathComponent("2_svg_rendered.png"))
+        }
+
+        // 3. Render companion PDF via our PDF→raster pipeline.
+        if let pdfData = try? ImageRenderer.renderToPNGData(url: pdfURL, widthPx: refW) {
+            try? pdfData.write(to: dir.appendingPathComponent("3_pdf_rendered.png"))
+        }
+    }
 
     func testCategoryA_xenome_svgScoresAtLeastAsWellAsPDF() {
         let refFP  = fp("image35.png")
@@ -161,6 +168,11 @@ final class MatchingAlgorithmTests: XCTestCase {
 
         let svgScore = combinedScore(ref: refFP, cand: svgFP)
         let pdfScore = combinedScore(ref: refFP, cand: pdfFP)
+
+        saveRenderComparison(label: "xenome",
+            ref: "image35.png",
+            svg: "Xenome_result_methylation_data_inkscape-7385.svg",
+            pdf: "Xenome_result_methylation_data_inkscape-7384.pdf")
 
         XCTAssertLessThanOrEqual(
             svgScore, pdfScore + 2.0,          // allow tiny rounding headroom
@@ -177,6 +189,11 @@ final class MatchingAlgorithmTests: XCTestCase {
         let svgScore = combinedScore(ref: refFP, cand: svgFP)
         let pdfScore = combinedScore(ref: refFP, cand: pdfFP)
 
+        saveRenderComparison(label: "clustered",
+            ref: "image94.png",
+            svg: "Clustered_pathways_network_plot_MSigDB_Hallmark-7990.svg",
+            pdf: "Clustered_pathways_network_plot_MSigDB_Hallmark-7988.pdf")
+
         XCTAssertLessThanOrEqual(
             svgScore, pdfScore + 2.0,
             "SVG score \(svgScore) should be ≤ companion PDF score \(pdfScore)"
@@ -190,6 +207,11 @@ final class MatchingAlgorithmTests: XCTestCase {
 
         let svgScore = combinedScore(ref: refFP, cand: svgFP)
         let pdfScore = combinedScore(ref: refFP, cand: pdfFP)
+
+        saveRenderComparison(label: "yoshida",
+            ref: "image16.png",
+            svg: "Description of Yoshida et al 2020-1122.svg",
+            pdf: "Description of Yoshida et al 2020-1120.pdf")
 
         XCTAssertLessThanOrEqual(
             svgScore, pdfScore + 2.0,
@@ -205,23 +227,24 @@ final class MatchingAlgorithmTests: XCTestCase {
         let svgScore = combinedScore(ref: refFP, cand: svgFP)
         let pdfScore = combinedScore(ref: refFP, cand: pdfFP)
 
+        saveRenderComparison(label: "mouseMethylation",
+            ref: "image37.png",
+            svg: "MouseMethylationWorkflow-1207.svg",
+            pdf: "MouseMethylationWorkflow-1205.pdf")
+
         XCTAssertLessThanOrEqual(
             svgScore, pdfScore + 2.0,
             "SVG score \(svgScore) should be ≤ companion PDF score \(pdfScore)"
         )
     }
 
-    // MARK: - Category B: Genuinely ambiguous — current formula fails
+    // MARK: - Category B: Near-duplicate disambiguation
 
     /// image47.png — two similar pasted PDFs.
-    /// pasted-image-2715.pdf is correct.  pasted-image-2722.pdf has lower aHash
-    /// but a much larger colorMoment distance (0.271 vs 0.015).
-    ///
-    /// Current formula (aHash + cm×5): FAILS  — wrong PDF scores lower.
-    /// Fix: increase colorMomentSortWeight to ≥ 8, OR add pHash to score.
-    func testCategoryB_pastedImage_currentFormula_documentsFailure() {
-        // This test is EXPECTED TO FAIL with the current algorithm.
-        // It documents the failure so the failure message shows the actual scores.
+    /// pasted-image-2715.pdf is correct: ahash=5, phash=2,  cm=0.015
+    /// pasted-image-2722.pdf is wrong:   ahash=3, phash=4,  cm=0.271
+    /// aHash alone favours the wrong PDF; pHash×0.5 + cm×5 corrects the ranking.
+    func testCategoryB_pastedImage_ranksCorrectFirst() {
         assertRanksFirst(
             reference:   "image47.png",
             correct:     "pasted-image-2715.pdf",
@@ -229,39 +252,16 @@ final class MatchingAlgorithmTests: XCTestCase {
         )
     }
 
-    func testCategoryB_pastedImage_extendedFormula_passes() {
-        // The same case PASSES when pHash (weight 0.5) is added to the score.
-        // Use this test as the target spec when updating MatchEngine's formula.
-        assertRanksFirstExtended(
-            reference:   "image47.png",
-            correct:     "pasted-image-2715.pdf",
-            distractors: ["pasted-image-2722.pdf"],
-            pHashWeight: 0.5
-        )
-    }
-
     /// image28.png — smoking vs non-smoking icon.
-    /// smoking-icon-2976.svg is correct: ahash=10, phash=2, cm≈0.004.
-    /// non-smoking-icon-2977.svg is wrong: ahash=6, phash=24, cm≈0.267.
-    ///
-    /// Current formula: FAILS — wrong icon scores 7.33 vs correct at 10.02.
-    /// Fix: adding pHash×0.5 makes correct=11.02, wrong=19.33.
-    func testCategoryB_smokingIcon_currentFormula_documentsFailure() {
-        // EXPECTED TO FAIL — documents the failure score gap for algorithm work.
+    /// smoking-icon-2976.svg is correct:     ahash=10, phash=2,  cm≈0.004  → score≈11.02
+    /// non-smoking-icon-2977.svg is wrong:   ahash=6,  phash=24, cm≈0.267  → score≈19.34
+    /// child-smoking-icon-export-7769.svg:   third distractor, should also rank below correct.
+    /// aHash alone (6 < 10) selected the wrong icon; pHash=24 exposes it clearly.
+    func testCategoryB_smokingIcon_ranksCorrectFirst() {
         assertRanksFirst(
             reference:   "image28.png",
             correct:     "smoking-icon-2976.svg",
             distractors: ["non-smoking-icon-2977.svg", "child-smoking-icon-export-7769.svg"]
-        )
-    }
-
-    func testCategoryB_smokingIcon_extendedFormula_passes() {
-        // PASSES with pHash weight 0.5 — target spec for MatchEngine improvement.
-        assertRanksFirstExtended(
-            reference:   "image28.png",
-            correct:     "smoking-icon-2976.svg",
-            distractors: ["non-smoking-icon-2977.svg", "child-smoking-icon-export-7769.svg"],
-            pHashWeight: 0.5
         )
     }
 
@@ -300,7 +300,7 @@ final class MatchingAlgorithmTests: XCTestCase {
         for row in cases {
             let refFP = fp(row.ref)
             print("\n── \(row.ref) ──────────────────────────")
-            print("  aHash  pHash  cm        score     file")
+            print("  aHash  pHash  cm        score(p+cm×\(Self.colorMomentSortWeight))  file")
 
             let allFiles = [row.correct] + row.distractors
             for fname in allFiles {

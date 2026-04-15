@@ -97,8 +97,28 @@ enum ImageRenderer {
     ///
     /// PDF contexts are naturally bottom-up (non-flipped), which is what `_NSSVGImageRep`
     /// expects when the graphics context is non-flipped — no coordinate mangling needed.
+    /// Injects `overflow="hidden"` into the root `<svg>` element so that
+    /// `_NSSVGImageRep` clips any path coordinates that fall outside the declared
+    /// viewBox.  This matches Keynote's clipping behaviour when it creates its
+    /// companion PDF alongside an imported SVG.
+    private static func svgAddingOverflowHidden(_ data: Data) -> Data {
+        guard var text = String(data: data, encoding: .utf8) else { return data }
+        guard let svgStart = text.range(of: "<svg", options: .caseInsensitive) else { return data }
+        // Search for the closing `>` of the opening <svg> tag by slicing the string
+        // from svgStart.upperBound onwards — avoids NSString/StringProtocol overload ambiguity.
+        guard let tagEnd = text[svgStart.upperBound...].range(of: ">") else { return data }
+        let tagContent = text[svgStart.lowerBound..<tagEnd.upperBound]
+        guard !tagContent.contains("overflow") else { return data }
+        text.insert(contentsOf: " overflow=\"hidden\"", at: tagEnd.lowerBound)
+        return text.data(using: .utf8) ?? data
+    }
+
     private static func svgToPDFDocument(url: URL) -> CGPDFDocument? {
-        guard let img = NSImage(contentsOf: url) else { return nil }
+        // Pre-process the SVG to clip overflow content, then load via NSImage so
+        // _NSSVGImageRep respects the viewBox boundary (matching Keynote's pipeline).
+        guard let rawData = try? Data(contentsOf: url) else { return nil }
+        let svgData = svgAddingOverflowHidden(rawData)
+        guard let img = NSImage(data: svgData) else { return nil }
         let size = img.size
         guard size.width > 0, size.height > 0 else { return nil }
 
@@ -110,6 +130,7 @@ enum ImageRenderer {
         ctx.beginPDFPage(nil)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        ctx.clip(to: CGRect(origin: .zero, size: size))
         img.draw(in: NSRect(origin: .zero, size: size))
         NSGraphicsContext.restoreGraphicsState()
         ctx.endPDFPage()
@@ -270,17 +291,38 @@ enum ImageRenderer {
         return try nsImage.pngQuantData()
     }
 
-    /// Render source to WebP data (quality 95) at widthPx using Swift-WebP.
+    /// Render source to WebP data (quality 75) at widthPx using Swift-WebP.
     static func renderToWebPData(url: URL, widthPx: Int = 2560) throws -> Data {
         let ext = url.pathExtension.lowercased()
         guard let cgImage = renderWithTransparency(url: url, width: widthPx, ext: ext) else {
             throw RendererError.failed(url.lastPathComponent)
         }
-        return try WebPEncoder().encode(
-            cgImage,
-            format: .rgba,
-            config: .preset(.picture, quality: 95)
-        )
+        // CGImages produced by CGContext(data: nil, ...) have an opaque internal backing
+        // buffer — CGDataProvider.data returns nil for them, so WebPEncoder's CGImage
+        // convenience method (which calls cgImage.getBaseAddress() → dataProvider.data)
+        // throws unexpectedPointerError. Re-render into a caller-owned RGBX buffer
+        // so WebPEncoder can read the bytes directly, bypassing CGDataProvider entirely.
+        // RGBX (noneSkipLast) avoids premultiplied-alpha colour shifts and gives WebP a
+        // plain 3-channel image — the X byte is ignored by the encoder.
+        let w = cgImage.width, h = cgImage.height, stride = w * 4
+        var pixels = [UInt8](repeating: 255, count: h * stride) // white background
+        try pixels.withUnsafeMutableBytes { buf in
+            let cs = CGColorSpaceCreateDeviceRGB()
+            guard let ctx = CGContext(
+                data: buf.baseAddress, width: w, height: h,
+                bitsPerComponent: 8, bytesPerRow: stride, space: cs,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else { throw RendererError.failed(url.lastPathComponent) }
+            ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        return try pixels.withUnsafeBytes { buf in
+            try WebPEncoder().encode(
+                buf.bindMemory(to: UInt8.self),
+                format: .rgbx,
+                config: .preset(.picture, quality: 75),
+                originWidth: w, originHeight: h, stride: stride
+            )
+        }
     }
 
     private static func renderWithTransparency(url: URL, width: Int, ext: String) -> CGImage? {

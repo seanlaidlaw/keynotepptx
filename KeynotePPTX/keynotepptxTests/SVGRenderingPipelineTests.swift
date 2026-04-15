@@ -119,8 +119,26 @@ final class SVGRenderingPipelineTests: XCTestCase {
     // eliminates 256-px downsampling noise and should bring distances closer to 0.
     // The rendered data goes through pngquant compression; we decode it back to
     // pixels before hashing to avoid comparing compressed bytes directly.
+    //
+    // Intermediate files (reference PNG copy + rendered SVG PNG) are written to:
+    //   ~/Library/Caches/keynotepptxTests/SVGRenderingPipeline/<run-UUID>/
+    // so you can open them in Preview to diagnose rendering differences visually.
+
+    private static let outputDir: URL = {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = caches
+            .appendingPathComponent("keynotepptxTests", isDirectory: true)
+            .appendingPathComponent("SVGRenderingPipeline", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        print("SVGRenderingPipelineTests output dir: \(dir.path)")
+        return dir
+    }()
 
     func testSVGRenderedAtExactWidth_matchesPPTXPNG() throws {
+        let runDir = Self.outputDir.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+
         for pair in pairs {
             try XCTContext.runActivity(named: "\(pair.svg) ↔ \(pair.png) (full-res)") { _ in
                 let svgURL = Self.testDataDir.appendingPathComponent(pair.svg)
@@ -141,6 +159,12 @@ final class SVGRenderingPipelineTests: XCTestCase {
                 } catch {
                     XCTFail("\(pair.svg): renderToPNGData threw — \(error)"); return
                 }
+
+                // Save intermediate files for visual inspection.
+                let stem = svgURL.deletingPathExtension().lastPathComponent
+                try? FileManager.default.copyItem(at: pngURL,
+                    to: runDir.appendingPathComponent("\(stem)_ref.png"))
+                try? svgData.write(to: runDir.appendingPathComponent("\(stem)_rendered.png"))
 
                 guard let src      = CGImageSourceCreateWithData(svgData as CFData, nil),
                       let svgCGRaw = CGImageSourceCreateImageAtIndex(src, 0, nil),
