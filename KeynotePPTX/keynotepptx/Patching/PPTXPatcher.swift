@@ -8,6 +8,61 @@ import Foundation
 ///   3. Serial: update XML references, rezip
 enum PPTXPatcher {
 
+    private struct Replacement {
+        let pptxFilename: String   // original name in ppt/media
+        let sourcePath: URL        // keynote or custom source file
+        let destFilename: String   // final name in ppt/media after patching
+        let kind: ReplacementKind
+    }
+
+    private static func materialise(_ repl: Replacement, into mediaDir: URL, patchMode: PatchMode) async throws {
+        let dest = mediaDir.appendingPathComponent(repl.destFilename)
+        let srcExt = repl.sourcePath.pathExtension.lowercased()
+        let isVector = srcExt == "svg" || srcExt == "pdf"
+        if isVector {
+            switch patchMode {
+            case .vectorInPlace:
+                try FileManager.default.copyItem(at: repl.sourcePath, to: dest)
+            case .embedPNG:
+                // For SVGs, prefer the companion PDF that Keynote stores alongside — it is the
+                // authoritative render source (identical to what Keynote embeds in PPTX).
+                let renderURL = srcExt == "svg" ? (companionPDF(for: repl.sourcePath) ?? repl.sourcePath) : repl.sourcePath
+                let data = try ImageRenderer.renderToPNGData(url: renderURL, widthPx: 2560)
+                try data.write(to: dest)
+            case .embedWebP75:
+                let renderURL = srcExt == "svg" ? (companionPDF(for: repl.sourcePath) ?? repl.sourcePath) : repl.sourcePath
+                let data = try ImageRenderer.renderToWebPData(url: renderURL, widthPx: 2560)
+                try data.write(to: dest)
+            }
+        } else {
+            try FileManager.default.copyItem(at: repl.sourcePath, to: dest)
+        }
+    }
+
+    /// Returns the companion PDF for an SVG (same directory, same stem after stripping the
+    /// trailing asset ID). Keynote stores a PDF alongside every imported SVG and uses that
+    /// PDF — not the SVG directly — when rendering to PPTX.
+    private static let trailingIDPattern = try! NSRegularExpression(pattern: #"^(.*)-\d+$"#)
+
+    private static func stripTrailingID(_ stem: String) -> String {
+        let r = NSRange(stem.startIndex..., in: stem)
+        guard let m = trailingIDPattern.firstMatch(in: stem, range: r),
+              let range = Range(m.range(at: 1), in: stem) else { return stem }
+        return String(stem[range])
+    }
+
+    private static func companionPDF(for svgURL: URL) -> URL? {
+        let dir = svgURL.deletingLastPathComponent()
+        let svgStem = stripTrailingID(svgURL.deletingPathExtension().lastPathComponent)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil
+        ) else { return nil }
+        return files.first {
+            $0.pathExtension.lowercased() == "pdf" &&
+            stripTrailingID($0.deletingPathExtension().lastPathComponent) == svgStem
+        }
+    }
+
     static func apply(
         rows: [MappingRow],
         pptxExtractDir: URL,
@@ -20,13 +75,6 @@ enum PPTXPatcher {
 
         // --- Phase 1: serial stub resolution ---
         progress(0.05, "Resolving file names…")
-
-        struct Replacement {
-            let pptxFilename: String   // original name in ppt/media
-            let sourcePath: URL        // keynote or custom source file
-            let destFilename: String   // final name in ppt/media after patching
-            let kind: ReplacementKind
-        }
 
         var replacements: [Replacement] = []
         var usedStems = Set<String>()
@@ -91,34 +139,24 @@ enum PPTXPatcher {
 
         let total = max(replacements.count, 1)
 
+        // Leave one core free for the main thread (UI events, XML serialisation).
+        let maxConcurrency = max(1, ProcessInfo.processInfo.processorCount - 1)
         try await withThrowingTaskGroup(of: Void.self) { group in
-            for repl in replacements {
-                group.addTask {
-                    let dest = mediaDir.appendingPathComponent(repl.destFilename)
-                    let srcExt = repl.sourcePath.pathExtension.lowercased()
-                    let isVector = srcExt == "svg" || srcExt == "pdf"
-
-                    if isVector {
-                        switch patchMode {
-                        case .vectorInPlace:
-                            try FileManager.default.copyItem(at: repl.sourcePath, to: dest)
-                        case .embedPNG:
-                            let data = try ImageRenderer.renderToPNGData(url: repl.sourcePath, widthPx: 2560)
-                            try data.write(to: dest)
-                        case .embedWebP75:
-                            let data = try ImageRenderer.renderToWebPData(url: repl.sourcePath, widthPx: 2560)
-                            try data.write(to: dest)
-                        }
-                    } else {
-                        try FileManager.default.copyItem(at: repl.sourcePath, to: dest)
-                    }
-                }
+            var nextIndex = 0
+            // Seed initial batch up to the concurrency limit.
+            while nextIndex < min(maxConcurrency, replacements.count) {
+                let repl = replacements[nextIndex]; nextIndex += 1
+                group.addTask { try await materialise(repl, into: mediaDir, patchMode: patchMode) }
             }
             var completed = 0
             for try await _ in group {
                 completed += 1
                 progress(0.10 + 0.75 * Double(completed) / Double(total),
                          "Converting \(completed)/\(total)…")
+                if nextIndex < replacements.count {
+                    let repl = replacements[nextIndex]; nextIndex += 1
+                    group.addTask { try await materialise(repl, into: mediaDir, patchMode: patchMode) }
+                }
             }
         }
 

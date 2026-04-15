@@ -2,7 +2,6 @@ import Foundation
 import AppKit
 import CoreGraphics
 import WebP
-import pngquant
 
 /// Renders any source image file (SVG, PDF, raster) to a CGImage.
 /// Returns CGImage (Sendable) so it can safely cross actor boundaries.
@@ -282,13 +281,26 @@ enum ImageRenderer {
     // MARK: - Materialise helpers (used by PPTXPatcher)
 
     /// Render a source file to PNG data at the given pixel width, preserving transparency.
+    ///
+    /// Uses ImageIO (CGImageDestination) rather than the pngquant NSImage wrapper.
+    /// pngquant's macOS pixel-extraction path calls NSGraphicsContext and NSImage drawing
+    /// methods that internally dispatch to the main thread synchronously — saturating the
+    /// main thread and causing a spinning beach ball when many tasks run in parallel.
+    /// ImageIO is fully thread-safe and produces well-compressed PNGs without touching AppKit.
     static func renderToPNGData(url: URL, widthPx: Int = 2560) throws -> Data {
         let ext = url.pathExtension.lowercased()
         guard let cgImage = renderWithTransparency(url: url, width: widthPx, ext: ext) else {
             throw RendererError.failed(url.lastPathComponent)
         }
-        let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-        return try nsImage.pngQuantData()
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            data as CFMutableData, "public.png" as CFString, 1, nil
+        ) else { throw RendererError.failed(url.lastPathComponent) }
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            throw RendererError.failed(url.lastPathComponent)
+        }
+        return data as Data
     }
 
     /// Render source to WebP data (quality 75) at widthPx using Swift-WebP.
