@@ -1,2 +1,6 @@
-swiftui-app-xcode/
-TestSlideDecks/
+KeynotePPTX/.build/
+KeynotePPTX/*.xcodeproj/xcuserdata/
+KeynotePPTX/*.xcworkspace/xcuserdata/
+KeynotePPTX/DerivedData/
+KeynotePPTX/.swiftpm/xcode/
+KeynotePPTX/TestData/
