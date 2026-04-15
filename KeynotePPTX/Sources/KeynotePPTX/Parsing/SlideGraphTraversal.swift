@@ -17,8 +17,8 @@ struct SlideGraphTraversal {
 
     // MARK: - Public API
 
-    /// Returns a map of filename → [slide numbers] (1-based).
-    func buildSlideMediaMap() -> [String: [Int]] {
+    /// Returns a map of filename → [slide numbers] (1-based) and the total slide count.
+    func buildSlideMediaMap() -> (mediaMap: [String: [Int]], slideCount: Int) {
         // Find all archives whose first message is type 2 (KN.ShowArchive)
         var showArchives: [(identifier: UInt64, payload: Data)] = []
         for (id, archive) in archives {
@@ -28,10 +28,12 @@ struct SlideGraphTraversal {
         }
 
         var result: [String: Set<Int>] = [:]
+        var slideCount = 0
 
         for showArchive in showArchives {
             // Parse slide list from KN.ShowArchive payload
             guard let slideNodeIDs = try? parseSlideNodeIDs(from: showArchive.payload) else { continue }
+            slideCount = max(slideCount, slideNodeIDs.count)
 
             for (slideIndex, nodeID) in slideNodeIDs.enumerated() {
                 let slideNumber = slideIndex + 1
@@ -46,7 +48,7 @@ struct SlideGraphTraversal {
             }
         }
 
-        return result.mapValues { Array($0).sorted() }
+        return (result.mapValues { Array($0).sorted() }, slideCount)
     }
 
     // MARK: - Slide node ID extraction

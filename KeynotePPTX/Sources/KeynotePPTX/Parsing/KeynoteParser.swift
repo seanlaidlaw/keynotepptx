@@ -8,7 +8,7 @@ enum KeynoteParser {
 
     static func parse(
         keynoteDir: URL
-    ) async throws -> (items: [KeynoteMediaItem], slideMedia: [String: [Int]]) {
+    ) async throws -> (items: [KeynoteMediaItem], slideMedia: [String: [Int]], slideCount: Int) {
 
         let fm = FileManager.default
         let indexDir = keynoteDir.appendingPathComponent("Index")
@@ -17,7 +17,7 @@ enum KeynoteParser {
         // --- Enumerate IWA files ---
         guard let iwaFiles = try? fm.contentsOfDirectory(at: indexDir, includingPropertiesForKeys: nil)
                 .filter({ $0.pathExtension == "iwa" }) else {
-            return ([], [:])
+            return ([], [:], 0)
         }
 
         // Identify template slide IWA files
@@ -72,7 +72,7 @@ enum KeynoteParser {
             templateObjectIDs: templateObjectIDs,
             idToFilename: idToFilename
         )
-        let slideMedia = traversal.buildSlideMediaMap()
+        let (slideMedia, slideCount) = traversal.buildSlideMediaMap()
 
         // --- Build KeynoteMediaItem list from Data/ ---
         var items: [KeynoteMediaItem] = []
@@ -94,6 +94,6 @@ enum KeynoteParser {
             }
         }
 
-        return (items, slideMedia)
+        return (items, slideMedia, slideCount)
     }
 }

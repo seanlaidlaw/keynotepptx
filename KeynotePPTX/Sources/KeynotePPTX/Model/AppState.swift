@@ -18,6 +18,8 @@ final class AppState {
 
     // MARK: - Review state
     var mappingRows: [MappingRow] = []
+    /// Non-nil when PPTX and Keynote have different slide counts; user is warned but can continue.
+    var slideCountMismatch: (pptxCount: Int, keynoteCount: Int)? = nil
 
     // MARK: - Patch options
     var patchMode: PatchMode = .vectorInPlace
@@ -73,6 +75,9 @@ final class AppState {
             self.mappingRows = result.rows
             self.pptxExtractDir = result.pptxDir
             self.keynoteExtractDir = result.keynoteDir
+            if result.pptxSlideCount != result.keynoteSlideCount {
+                self.slideCountMismatch = (result.pptxSlideCount, result.keynoteSlideCount)
+            }
             self.phase = .review
 
         } catch {
@@ -118,6 +123,8 @@ struct PipelineResult: Sendable {
     let rows: [MappingRow]
     let pptxDir: URL
     let keynoteDir: URL
+    let pptxSlideCount: Int
+    let keynoteSlideCount: Int
 }
 
 // MARK: - Processing pipeline (nonisolated, runs off main actor)
@@ -172,10 +179,10 @@ enum ProcessingPipeline {
         progress(0.08, "Parsing slide structure…")
 
         // 2. Parse PPTX XML
-        let (slideMedia, masterOnlyMedia) = try PPTXParser.parse(pptxDir: pptxDir)
+        let (slideMedia, masterOnlyMedia, pptxSlideCount) = try PPTXParser.parse(pptxDir: pptxDir)
 
         // 3. Parse Keynote IWA
-        let (keynoteItems, keynoteSlideMedia) = try await KeynoteParser.parse(keynoteDir: keynoteDir)
+        let (keynoteItems, keynoteSlideMedia, keynoteSlideCount) = try await KeynoteParser.parse(keynoteDir: keynoteDir)
         progress(0.15, "Building file lists…")
 
         // 4. Build PPTX media items (exclude master-only)
@@ -243,6 +250,12 @@ enum ProcessingPipeline {
         )
 
         progress(1.0, "Done")
-        return PipelineResult(rows: rows, pptxDir: pptxDir, keynoteDir: keynoteDir)
+        return PipelineResult(
+            rows: rows,
+            pptxDir: pptxDir,
+            keynoteDir: keynoteDir,
+            pptxSlideCount: pptxSlideCount,
+            keynoteSlideCount: keynoteSlideCount
+        )
     }
 }

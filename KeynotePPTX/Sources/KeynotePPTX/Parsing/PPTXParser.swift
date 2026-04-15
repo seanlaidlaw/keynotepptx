@@ -8,20 +8,22 @@ enum PPTXParser {
 
     private static let relNS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
-    static func parse(pptxDir: URL) throws -> (slideMedia: [String: [Int]], masterOnlyMedia: Set<String>) {
+    static func parse(pptxDir: URL) throws -> (slideMedia: [String: [Int]], masterOnlyMedia: Set<String>, slideCount: Int) {
         let fm = FileManager.default
 
         // --- Slide content media ---
         var slideMedia: [String: [Int]] = [:]
+        var slideNumbers = Set<Int>()
         let slideRelsDir = pptxDir.appendingPathComponent("ppt/slides/_rels")
 
         if fm.fileExists(atPath: slideRelsDir.path) {
             let relsFiles = try fm.contentsOfDirectory(at: slideRelsDir, includingPropertiesForKeys: nil)
             for relsURL in relsFiles where relsURL.pathExtension == "rels" {
-                guard let slideNumber = slideNumber(from: relsURL.lastPathComponent) else { continue }
+                guard let slideNum = slideNumber(from: relsURL.lastPathComponent) else { continue }
+                slideNumbers.insert(slideNum)
                 let mediaNames = try mediaFilenames(in: relsURL)
                 for name in mediaNames {
-                    slideMedia[name, default: []].append(slideNumber)
+                    slideMedia[name, default: []].append(slideNum)
                 }
             }
         }
@@ -43,7 +45,7 @@ enum PPTXParser {
         }
 
         let masterOnlyMedia = masterMedia.subtracting(slideContentMedia)
-        return (slideMedia, masterOnlyMedia)
+        return (slideMedia, masterOnlyMedia, slideNumbers.count)
     }
 
     // MARK: - Helpers

@@ -11,6 +11,9 @@ struct ReviewView: View {
     @State private var filter: ReviewFilter = .all
     @State private var showPatchOptions = false
     @State private var filteredIndices: [Int] = []
+    @AppStorage("hasSeenReviewOnboarding") private var hasSeenOnboarding = false
+    @State private var showOnboarding = false
+    @State private var showSlideCountAlert = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,14 +69,31 @@ struct ReviewView: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.top, 8)
+                .padding(.top, 16)
                 .padding(.bottom, 12)
             }
         }
         .sheet(isPresented: $showPatchOptions) {
             PatchOptionsView()
         }
-        .task { updateFilteredIndices() }
+        .sheet(isPresented: $showOnboarding) {
+            ReviewOnboardingView {
+                hasSeenOnboarding = true
+                showOnboarding = false
+            }
+        }
+        .alert("Slide count mismatch", isPresented: $showSlideCountAlert) {
+            Button("Continue anyway", role: .none) { }
+        } message: {
+            if let m = appState.slideCountMismatch {
+                Text("The PowerPoint has \(m.pptxCount) slide\(m.pptxCount == 1 ? "" : "s") but the Keynote has \(m.keynoteCount). They may not be from the same source — review matches carefully.")
+            }
+        }
+        .task {
+            updateFilteredIndices()
+            if !hasSeenOnboarding { showOnboarding = true }
+            if appState.slideCountMismatch != nil { showSlideCountAlert = true }
+        }
         .onChange(of: filter) { updateFilteredIndices() }
         .onChange(of: appState.confirmedCount) { updateFilteredIndices() }
         .onChange(of: appState.mappingRows.count) { updateFilteredIndices() }
