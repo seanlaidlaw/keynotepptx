@@ -1,134 +1,81 @@
-# Keynote → PPTX Image Replacer
+# KeynotePPTX
 
-**Restore high-quality Keynote assets into PPTX exports — replaces degraded rasters with original SVG, PDF, and full-resolution images via a local review UI.**
+**Restore high-quality Keynote assets into PPTX exports — replaces degraded rasters with original SVG, PDF, and full-resolution images.**
 
 ---
 
 ## The problem
 
-When you export a Keynote presentation to PowerPoint, every vector graphic and high-resolution image is flattened into a compressed JPEG or PNG. The resulting PPTX can look noticeably softer or more pixelated than the Keynote original — especially for diagrams, charts, and figures that were originally SVG or PDF.
+When you export a Keynote presentation to PowerPoint, every vector graphic and high-resolution image is flattened into a compressed raster. The resulting PPTX can look noticeably softer or pixelated compared to the Keynote original — especially for charts, diagrams, and figures that were originally SVG or PDF.
 
-There is no built-in way to reverse this. This tool automates it.
+![Before and after comparison](docs/keynotepptx_img_before_after.png)
+
+There is no built-in way to reverse this. KeynotePPTX automates it.
 
 ---
 
 ## How it works
 
-1. Upload your `.pptx` and the `.key` file it was exported from.
-2. The tool parses both files — using slide structure XML and Keynote's internal protobuf data — to match each PPTX image back to its Keynote original.
-3. A review UI shows you each match. Confirm, switch to a different candidate, upload your own file, or skip.
-4. Choose an output format and download a patched PPTX with the originals embedded.
+1. Drop your `.pptx` and the `.key` file it was exported from.
+2. The app parses both files — using slide structure XML and Keynote's internal binary format — to match each PPTX image back to its Keynote original.
+3. A review screen shows you each match. Confirm, switch to a different candidate, browse for your own file, or skip.
+4. Choose an output format and save a patched PPTX with the originals embedded.
 
-> **Important:** the `.pptx` must have been exported from the `.key` file. Matching an unrelated PPTX and Keynote file will produce poor results.
+> **Note:** the `.pptx` must have been exported from the `.key` file. Matching an unrelated PPTX and Keynote file will produce poor results.
 
 ---
 
-## Screenshots
+## Download
 
-**Review mappings** — each PPTX image is shown alongside its best Keynote candidates. Matches found via slide structure are pre-selected automatically.
+Download the latest release from the [Releases page](../../releases). Open the DMG and drag **KeynotePPTX** into your Applications folder.
 
-![Review mappings UI](docs/screenshot_review.png)
+> **First launch:** macOS will warn the app is from an unidentified developer because it is not notarized. Right-click the app and choose **Open** to bypass this once.
 
-**Choose output mode** — pick how SVG/PDF replacements are embedded into the patched PPTX.
+---
 
-![Choose output mode UI](docs/screenshot_export.png)
+## Usage
+
+### 1. Load your files
+
+Drop a PowerPoint file and its source Keynote file onto the two drop zones, then click **Process**.
+
+![Home screen](docs/keynotepptx_swiftui_home.png)
+
+### 2. Review matches
+
+The app automatically selects the best Keynote replacement for each PPTX image. The review screen shows the low-quality PPTX image on the left and the top candidates from the Keynote file on the right.
+
+![Review screen](docs/keynotepptx_swiftui_review.png)
+
+The first time you reach this screen an explanation of how to review will appear. The highlighted card is the algorithm's best guess — confirm it if it looks right, tap a different candidate to switch, use **Browse…** to pick any file from your Mac, or **Skip** to leave the image unchanged.
+
+![Review onboarding modal](docs/keynotepptx_swiftui_reviewmodal.png)
+
+Each candidate card shows the filename, format badge (SVG, PDF, JPEG…), file size, and a match distance score (lower is better). The toolbar shows a running count of confirmed and skipped images and lets you filter the list to show only items that still need attention.
+
+### 3. Choose output mode
+
+Once you click **Export**, choose how vector replacements are embedded into the patched PPTX.
+
+![Export options](docs/keynotepptx_swiftui_export.png)
+
+| Mode | Best for | Description |
+|---|---|---|
+| **Embed vector images** | Smallest file, infinite scalability | SVG/PDF files embedded directly. Best for PowerPoint on Mac or Windows. |
+| **Embed as high quality PNG** | Maximum compatibility | SVG/PDF rasterised to PNG at 2560 px wide. Best for Google Slides and broad compatibility. |
+| **Embed as WebP quality 75** | Smallest file size | Same as PNG but converted to WebP. Smaller output but may not render in older apps. |
+
+Raster replacements (JPEG, PNG, TIFF) are always copied as-is regardless of the mode chosen.
+
+### 4. Save
+
+When patching completes, save the file anywhere on your Mac or reveal it in Finder.
+
+![Patching complete](docs/keynotepptx_swiftui_complete.png)
 
 ---
 
 ## Requirements
 
-### System dependencies
-
-**macOS (Homebrew):**
-
-```bash
-brew install librsvg pngquant poppler
-```
-
-| Tool | Purpose |
-|---|---|
-| `rsvg-convert` (librsvg) | SVG → PNG conversion |
-| `pngquant` | Lossy PNG compression after conversion |
-| `pdftocairo` (poppler) | PDF → SVG (vector embed mode) |
-
-**Linux:** the same tools are available via `apt` / `dnf`. Windows is not currently supported.
-
----
-
-## Install
-
-### With uv (recommended)
-
-[uv](https://docs.astral.sh/uv/) installs the tool globally and makes `keynotepptx` available as a command:
-
-```bash
-uv tool install git+https://github.com/seanlaidlaw/keynotepptx
-```
-
-To update to the latest version:
-
-```bash
-uv tool install --reinstall git+https://github.com/seanlaidlaw/keynotepptx
-```
-
-### With pip / venv
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install git+https://github.com/seanlaidlaw/keynotepptx
-```
-
----
-
-## Running
-
-```bash
-keynotepptx --pptx /path/to/presentation.pptx --keynote /path/to/presentation.key
-```
-
-A browser tab opens automatically. Press **Ctrl-C** to stop the server.
-
-If `--pptx` and `--keynote` are omitted, the web UI lets you upload both files on the start page. The port defaults to 5000 and advances automatically if that port is already in use.
-
-### All options
-
-| Flag | Default | Description |
-|---|---|---|
-| `--pptx` | — | Path to the PowerPoint file |
-| `--keynote` | — | Path to the Keynote file |
-| `--mapping-csv` | — | Pre-load a confirmed mapping CSV from a previous run |
-| `--host` | `0.0.0.0` | Host to bind the server to |
-| `--port` | `5000` | Starting port (advances automatically if in use) |
-| `--no-browser` | off | Don't open a browser tab on start |
-
-### Re-using a previous mapping
-
-After patching, a `confirmed_mapping.csv` is saved alongside the output PPTX. Pass it back on the next run to restore all your previous choices:
-
-```bash
-keynotepptx \
-  --pptx /path/to/presentation.pptx \
-  --keynote /path/to/presentation.key \
-  --mapping-csv /path/to/confirmed_mapping.csv
-```
-
----
-
-## Patch modes
-
-After reviewing matches, choose how replacements are embedded:
-
-| Mode | Best for | Description |
-|---|---|---|
-| **Embed vector images** | Smallest file, infinite scalability | SVG files embedded directly; PDFs converted to SVG first. Choose this if your PPTX viewer supports embedded SVG (PowerPoint for Mac/Windows does). |
-| **Embed as high quality PNG** | Maximum compatibility | SVG/PDF rasterised to PNG at 2560 px wide, compressed with pngquant. Use this if you need the file to open correctly everywhere. |
-| **Embed as WEBP quality 75** | Smaller file size | Same as PNG but converted to WebP at quality 75. Smaller PPTX but slower to open in PowerPoint. |
-
-Raster replacements (JPEG, TIFF, etc.) are embedded as-is regardless of the mode chosen. Transparency is preserved in all modes.
-
----
-
-## Output
-
-The patched PPTX downloads automatically from the browser when processing completes. A CSV report listing every replacement and its source is also available for download.
+- macOS 14 or later
+- Apple Silicon or Intel Mac
